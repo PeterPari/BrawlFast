@@ -8,8 +8,12 @@ const PRIOR_WEIGHT: f64 = 1500.0;
 
 const KV_MAPS_CATALOG: &str = "catalog:maps";
 const KV_BRAWLERS_CATALOG: &str = "catalog:brawlers";
+const KV_MAPS_SEARCH_CATALOG: &str = "catalog:mapsLite";
+const KV_BRAWLERS_SEARCH_CATALOG: &str = "catalog:brawlersLite";
 const KV_ACTIVE_MAP_IDS: &str = "catalog:activeMapIds";
 const KV_LOADED_AT: &str = "catalog:loadedAt";
+const KV_MAP_RAW_PREFIX: &str = "mapraw:";
+const KV_BRAWLER_RAW_PREFIX: &str = "brawlerraw:";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CatalogMap {
@@ -179,9 +183,28 @@ async fn search_handler(url: &url::Url, env: &Env) -> Result<Response> {
         return json_response(&json!({ "maps": [], "brawlers": [] }), 200);
     }
 
-    let state = load_catalog(env).await?;
+    let mut state = load_catalog(env).await?;
+    if state.maps.is_empty() || state.brawlers.is_empty() {
+        state = bootstrap_catalog(env).await?;
+    }
 
-    let maps = top_scored_maps(&state.maps, &qn, 8)
+    let mut maps_hits = top_scored_maps(&state.maps, &qn, 8);
+    let mut brawler_hits = top_scored_brawlers(&state.brawlers, &qn, 8);
+
+    if maps_hits.is_empty() && brawler_hits.is_empty() {
+        if let Ok(refreshed) = bootstrap_catalog(env).await {
+            state = refreshed;
+            maps_hits = top_scored_maps(&state.maps, &qn, 8);
+            brawler_hits = top_scored_brawlers(&state.brawlers, &qn, 8);
+        }
+
+        if maps_hits.is_empty() && brawler_hits.is_empty() {
+            let (maps, brawlers) = origin_search_fallback(&qn, env).await?;
+            return json_response(&json!({ "maps": maps, "brawlers": brawlers }), 200);
+        }
+    }
+
+    let maps = maps_hits
         .into_iter()
         .map(|m| {
             json!({
@@ -193,7 +216,7 @@ async fn search_handler(url: &url::Url, env: &Env) -> Result<Response> {
         })
         .collect::<Vec<_>>();
 
-    let brawlers = top_scored_brawlers(&state.brawlers, &qn, 8)
+    let brawlers = brawler_hits
         .into_iter()
         .map(|b| json!({ "id": b.id, "name": b.name }))
         .collect::<Vec<_>>();
@@ -203,163 +226,44 @@ async fn search_handler(url: &url::Url, env: &Env) -> Result<Response> {
 
 async fn map_handler(id: i64, env: &Env, _ctx: &Context) -> Result<Response> {
     let kv = env.kv("BRAWLFAST_KV")?;
-    let key = format!("map:{}", id);
-    if let Some(mut cached) = kv.get(&key).json::<Value>().await? {
-        let has_brawlers = cached
-            .get("brawlers")
-            .and_then(|v| v.as_array())
-            .map(|arr| !arr.is_empty())
-            .unwrap_or(false);
-        let has_teams = cached
-            .get("teams")
-            .and_then(|v| v.as_array())
-            .map(|arr| !arr.is_empty())
-            .unwrap_or(false);
-        if !has_brawlers && !has_teams {
-            let _ = kv.delete(&key).await;
-        } else {
-        if let Some(obj) = cached.as_object_mut() {
-            obj.insert("source".into(), Value::String("kv".into()));
-            obj.insert("cached".into(), Value::Bool(true));
-            obj.insert("fetchMs".into(), Value::Number(0.into()));
-        }
-        return json_response(&cached, 200);
-        }
+    let key = format!("{}{}", KV_MAP_RAW_PREFIX, id);
+    if let Some(cached) = kv.get(&key).text().await? {
+        return json_text_response(&cached, 200);
     }
 
-    let state = load_catalog(env).await?;
-    let brawler_name_by_id = state
-        .brawlers
-        .iter()
-        .map(|b| (b.id, b.name.clone()))
-        .collect::<HashMap<_, _>>();
-
-    match fetch_json(format!("/maps/{}", id), env).await {
-        Ok(raw) => {
-            if let Some(stripped) = strip_map_response(&raw, &brawler_name_by_id) {
-                let payload = json!({
-                    "map": stripped.map,
-                    "mode": stripped.mode,
-                    "brawlers": stripped.brawlers,
-                    "teams": stripped.teams,
-                    "source": "origin-fetch",
-                    "prefetchedAt": now_ms()
-                });
-                let _ = kv.put(&key, serde_json::to_string(&payload)?)?.execute().await;
-
-                return json_response(
-                    &json!({
-                        "map": payload["map"],
-                        "mode": payload["mode"],
-                        "brawlers": payload["brawlers"],
-                        "teams": payload["teams"],
-                        "source": "origin-fetch",
-                        "cached": false,
-                        "fetchMs": 0
-                    }),
-                    200,
-                );
-            }
-
-            json_response(
-                &json!({
-                    "error": "Map not found or unsupported response shape.",
-                    "suggestions": best_suggestions("map", &id.to_string(), &state)
-                }),
-                404,
-            )
-        }
-        Err(err) => json_response(
-            &json!({
-                "error": "Unable to fetch map data right now.",
-                "suggestions": best_suggestions("map", &id.to_string(), &state),
-                "detail": err.to_string()
-            }),
-            502,
-        ),
+    let (status, body) = fetch_json_text_with_status(format!("/maps/{}", id), env).await?;
+    if status == 200 {
+        let _ = kv.put(&key, body.clone())?.execute().await;
     }
+
+    json_text_response(&body, status)
 }
 
 async fn brawler_handler(id: i64, env: &Env, _ctx: &Context) -> Result<Response> {
     let kv = env.kv("BRAWLFAST_KV")?;
-    let key = format!("brawler:{}", id);
-    if let Some(mut cached) = kv.get(&key).json::<Value>().await? {
-        let has_best_maps = cached
-            .get("bestMaps")
-            .and_then(|v| v.as_array())
-            .map(|arr| !arr.is_empty())
-            .unwrap_or(false);
-        if !has_best_maps {
-            let _ = kv.delete(&key).await;
-        } else {
-        if let Some(obj) = cached.as_object_mut() {
-            obj.insert("source".into(), Value::String("kv".into()));
-            obj.insert("cached".into(), Value::Bool(true));
-            obj.insert("fetchMs".into(), Value::Number(0.into()));
-        }
-        return json_response(&cached, 200);
-        }
+    let key = format!("{}{}", KV_BRAWLER_RAW_PREFIX, id);
+    if let Some(cached) = kv.get(&key).text().await? {
+        return json_text_response(&cached, 200);
     }
 
-    let state = load_catalog(env).await?;
-    let brawler_name_by_id = state
-        .brawlers
-        .iter()
-        .map(|b| (b.id, b.name.clone()))
-        .collect::<HashMap<_, _>>();
-
-    match fetch_json(format!("/brawlers/{}", id), env).await {
-        Ok(raw) => {
-            if let Some(stripped) = strip_brawler_response(&raw, id, &state.maps, &brawler_name_by_id) {
-                let payload = json!({
-                    "name": stripped.name,
-                    "bestMaps": stripped.best_maps,
-                    "source": "origin-fetch",
-                    "prefetchedAt": now_ms()
-                });
-                let _ = kv.put(&key, serde_json::to_string(&payload)?)?.execute().await;
-
-                return json_response(
-                    &json!({
-                        "name": payload["name"],
-                        "bestMaps": payload["bestMaps"],
-                        "source": "origin-fetch",
-                        "cached": false,
-                        "fetchMs": 0
-                    }),
-                    200,
-                );
-            }
-
-            json_response(
-                &json!({
-                    "error": "Brawler not found or unsupported response shape.",
-                    "suggestions": best_suggestions("brawler", &id.to_string(), &state)
-                }),
-                404,
-            )
-        }
-        Err(err) => json_response(
-            &json!({
-                "error": "Unable to fetch brawler data right now.",
-                "suggestions": best_suggestions("brawler", &id.to_string(), &state),
-                "detail": err.to_string()
-            }),
-            502,
-        ),
+    let (status, body) = fetch_json_text_with_status(format!("/brawlers/{}", id), env).await?;
+    if status == 200 {
+        let _ = kv.put(&key, body.clone())?.execute().await;
     }
+
+    json_text_response(&body, status)
 }
 
 async fn load_catalog(env: &Env) -> Result<CatalogState> {
     let kv = env.kv("BRAWLFAST_KV")?;
 
     let maps = kv
-        .get(KV_MAPS_CATALOG)
+        .get(KV_MAPS_SEARCH_CATALOG)
         .json::<Vec<CatalogMap>>()
         .await?
         .unwrap_or_default();
     let brawlers = kv
-        .get(KV_BRAWLERS_CATALOG)
+        .get(KV_BRAWLERS_SEARCH_CATALOG)
         .json::<Vec<CatalogBrawler>>()
         .await?
         .unwrap_or_default();
@@ -382,6 +286,43 @@ async fn load_catalog(env: &Env) -> Result<CatalogState> {
         maps,
         brawlers,
         active_map_ids: active_ids,
+        loaded_at,
+    })
+}
+
+async fn bootstrap_catalog(env: &Env) -> Result<CatalogState> {
+    let maps = fetch_maps(env).await?;
+    let brawlers = fetch_brawlers(env).await?;
+    let active_map_ids = fetch_active_map_ids(env).await.unwrap_or_default();
+    let loaded_at = now_ms();
+
+    let maps_catalog = maps
+        .iter()
+        .map(|m| CatalogMap {
+            id: m.id,
+            name: m.name.clone(),
+            mode: m.mode.clone(),
+            stats: None,
+            team_stats: None,
+            norm: m.norm.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let kv = env.kv("BRAWLFAST_KV")?;
+    let maps_full_json = serde_json::to_string(&maps)?;
+    let maps_lite_json = serde_json::to_string(&maps_catalog)?;
+    let brawlers_json = serde_json::to_string(&brawlers)?;
+    kv.put(KV_MAPS_CATALOG, maps_full_json)?.execute().await?;
+    kv.put(KV_MAPS_SEARCH_CATALOG, maps_lite_json)?.execute().await?;
+    kv.put(KV_BRAWLERS_CATALOG, brawlers_json.clone())?.execute().await?;
+    kv.put(KV_BRAWLERS_SEARCH_CATALOG, brawlers_json)?.execute().await?;
+    kv.put(KV_ACTIVE_MAP_IDS, serde_json::to_string(&active_map_ids)?)?.execute().await?;
+    kv.put(KV_LOADED_AT, loaded_at.to_string())?.execute().await?;
+
+    Ok(CatalogState {
+        maps: maps_catalog,
+        brawlers,
+        active_map_ids: active_map_ids.into_iter().collect::<HashSet<_>>(),
         loaded_at,
     })
 }
@@ -414,6 +355,29 @@ async fn fetch_json(path: String, env: &Env) -> Result<Value> {
     }
 
     resp.json::<Value>().await
+}
+
+async fn fetch_json_text_with_status(path: String, env: &Env) -> Result<(u16, String)> {
+    let base = env
+        .var("BRAWL_API_BASE")
+        .ok()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "https://api.brawlify.com/v1".to_string());
+    let full_url = format!("{}{}", base, path);
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Get);
+    init.with_redirect(worker::RequestRedirect::Follow);
+
+    let headers = Headers::new();
+    headers.set("accept", "application/json")?;
+    init.with_headers(headers);
+
+    let req = Request::new_with_init(&full_url, &init)?;
+    let mut resp = Fetch::Request(req).send().await?;
+    let status = resp.status_code();
+    let body = resp.text().await?;
+    Ok((status, body))
 }
 
 async fn fetch_maps(env: &Env) -> Result<Vec<CatalogMap>> {
@@ -543,10 +507,31 @@ async fn warm_all(env: &Env) -> Result<Value> {
         active_map_ids.len()
     );
 
-    // Step 2: Save catalogs to KV
+    // Step 2: Save catalogs to KV (full for brawler fallback, lightweight for search/health)
     let kv = env.kv("BRAWLFAST_KV")?;
-    kv.put(KV_MAPS_CATALOG, serde_json::to_string(&maps)?)?.execute().await?;
-    kv.put(KV_BRAWLERS_CATALOG, serde_json::to_string(&brawlers)?)?.execute().await?;
+    let maps_catalog = maps
+        .iter()
+        .map(|m| CatalogMap {
+            id: m.id,
+            name: m.name.clone(),
+            mode: m.mode.clone(),
+            stats: None,
+            team_stats: None,
+            norm: m.norm.clone(),
+        })
+        .collect::<Vec<_>>();
+    let maps_full_json = serde_json::to_string(&maps)?;
+    let maps_lite_json = serde_json::to_string(&maps_catalog)?;
+    console_log!("📦 catalog:maps(full) size: {} bytes", maps_full_json.len());
+    console_log!("📦 catalog:maps(light) size: {} bytes", maps_lite_json.len());
+    kv.put(KV_MAPS_CATALOG, maps_full_json)?.execute().await?;
+    kv.put(KV_MAPS_SEARCH_CATALOG, maps_lite_json)?
+        .execute()
+        .await?;
+    console_log!("✅ catalog:maps written");
+    let brawlers_json = serde_json::to_string(&brawlers)?;
+    kv.put(KV_BRAWLERS_CATALOG, brawlers_json.clone())?.execute().await?;
+    kv.put(KV_BRAWLERS_SEARCH_CATALOG, brawlers_json)?.execute().await?;
     kv.put(KV_ACTIVE_MAP_IDS, serde_json::to_string(&active_map_ids)?)?.execute().await?;
     kv.put(KV_LOADED_AT, now_ms().to_string())?.execute().await?;
 
@@ -597,6 +582,65 @@ async fn warm_all(env: &Env) -> Result<Value> {
     }))
 }
 
+async fn origin_search_fallback(qn: &str, env: &Env) -> Result<(Vec<Value>, Vec<Value>)> {
+    let active_ids = fetch_active_map_ids(env).await.unwrap_or_default();
+    let active_set = active_ids.into_iter().collect::<HashSet<_>>();
+
+    let maps_payload = fetch_json("/maps".to_string(), env).await.unwrap_or_else(|_| json!({}));
+    let maps_items = maps_payload
+        .get("list")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .or_else(|| maps_payload.get("items").and_then(|v| v.as_array()).cloned())
+        .or_else(|| maps_payload.as_array().cloned())
+        .unwrap_or_default();
+
+    let mut map_scored = maps_items
+        .into_iter()
+        .filter_map(|item| {
+            let id = to_i64(item.get("id"))?;
+            let name = item.get("name").and_then(|v| v.as_str())?.to_string();
+            let score = score_match(qn, &normalize_text(&name))?;
+            let mode = mode_name(&item);
+            Some((score, json!({
+                "id": id,
+                "name": name,
+                "mode": mode,
+                "activeToday": active_set.contains(&id)
+            })))
+        })
+        .collect::<Vec<_>>();
+    map_scored.sort_by(|a, b| b.0.cmp(&a.0));
+    let maps = map_scored.into_iter().take(8).map(|(_, v)| v).collect::<Vec<_>>();
+
+    let brawlers_payload = fetch_json("/brawlers".to_string(), env).await.unwrap_or_else(|_| json!({}));
+    let brawlers_items = brawlers_payload
+        .get("list")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .or_else(|| brawlers_payload.get("items").and_then(|v| v.as_array()).cloned())
+        .or_else(|| brawlers_payload.as_array().cloned())
+        .unwrap_or_default();
+
+    let mut brawler_scored = brawlers_items
+        .into_iter()
+        .filter_map(|item| {
+            let id = to_i64(item.get("id"))?;
+            let name = item.get("name").and_then(|v| v.as_str())?.to_string();
+            let score = score_match(qn, &normalize_text(&name))?;
+            Some((score, json!({ "id": id, "name": name })))
+        })
+        .collect::<Vec<_>>();
+    brawler_scored.sort_by(|a, b| b.0.cmp(&a.0));
+    let brawlers = brawler_scored
+        .into_iter()
+        .take(8)
+        .map(|(_, v)| v)
+        .collect::<Vec<_>>();
+
+    Ok((maps, brawlers))
+}
+
 struct PrefetchResult {
     success: usize,
     failed: usize,
@@ -640,32 +684,18 @@ async fn prefetch_maps_parallel(
 
 async fn prefetch_single_map(
     map: &CatalogMap,
-    brawler_name_by_id: &HashMap<i64, String>,
+    _brawler_name_by_id: &HashMap<i64, String>,
     kv: &kv::KvStore,
     env: &Env,
 ) -> bool {
-    match fetch_json(format!("/maps/{}", map.id), env).await {
-        Ok(raw) => {
-            if let Some(stripped) = strip_map_response(&raw, brawler_name_by_id) {
-                let payload = json!({
-                    "map": stripped.map,
-                    "mode": stripped.mode,
-                    "brawlers": stripped.brawlers,
-                    "teams": stripped.teams,
-                    "source": "kv-prefetch",
-                    "prefetchedAt": now_ms()
-                });
-                match serde_json::to_string(&payload) {
-                    Ok(json_str) => {
-                        match kv.put(&format!("map:{}", map.id), json_str) {
-                            Ok(builder) => builder.execute().await.is_ok(),
-                            Err(_) => false,
-                        }
-                    }
-                    Err(_) => false,
-                }
-            } else {
-                false
+    match fetch_json_text_with_status(format!("/maps/{}", map.id), env).await {
+        Ok((status, body)) => {
+            if status != 200 || body.is_empty() {
+                return false;
+            }
+            match kv.put(&format!("{}{}", KV_MAP_RAW_PREFIX, map.id), body) {
+                Ok(builder) => builder.execute().await.is_ok(),
+                Err(_) => false,
             }
         }
         Err(_) => false,
@@ -708,31 +738,19 @@ async fn prefetch_brawlers_parallel(
 
 async fn prefetch_single_brawler(
     brawler: &CatalogBrawler,
-    maps: &[CatalogMap],
-    brawler_name_by_id: &HashMap<i64, String>,
+    _maps: &[CatalogMap],
+    _brawler_name_by_id: &HashMap<i64, String>,
     kv: &kv::KvStore,
     env: &Env,
 ) -> bool {
-    match fetch_json(format!("/brawlers/{}", brawler.id), env).await {
-        Ok(raw) => {
-            if let Some(stripped) = strip_brawler_response(&raw, brawler.id, maps, brawler_name_by_id) {
-                let payload = json!({
-                    "name": stripped.name,
-                    "bestMaps": stripped.best_maps,
-                    "source": "kv-prefetch",
-                    "prefetchedAt": now_ms()
-                });
-                match serde_json::to_string(&payload) {
-                    Ok(json_str) => {
-                        match kv.put(&format!("brawler:{}", brawler.id), json_str) {
-                            Ok(builder) => builder.execute().await.is_ok(),
-                            Err(_) => false,
-                        }
-                    }
-                    Err(_) => false,
-                }
-            } else {
-                false
+    match fetch_json_text_with_status(format!("/brawlers/{}", brawler.id), env).await {
+        Ok((status, body)) => {
+            if status != 200 || body.is_empty() {
+                return false;
+            }
+            match kv.put(&format!("{}{}", KV_BRAWLER_RAW_PREFIX, brawler.id), body) {
+                Ok(builder) => builder.execute().await.is_ok(),
+                Err(_) => false,
             }
         }
         Err(_) => false,
@@ -1057,7 +1075,14 @@ fn best_suggestions(kind: &str, query: &str, state: &CatalogState) -> Vec<String
 fn top_scored_maps<'a>(items: &'a [CatalogMap], qn: &str, limit: usize) -> Vec<&'a CatalogMap> {
     let mut scored = items
         .iter()
-        .filter_map(|item| score_match(qn, &item.norm).map(|s| (s, item)))
+        .filter_map(|item| {
+            let target_norm = if item.norm.is_empty() {
+                normalize_text(&item.name)
+            } else {
+                item.norm.clone()
+            };
+            score_match(qn, &target_norm).map(|s| (s, item))
+        })
         .collect::<Vec<_>>();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
     scored.into_iter().take(limit).map(|(_, item)| item).collect()
@@ -1066,7 +1091,14 @@ fn top_scored_maps<'a>(items: &'a [CatalogMap], qn: &str, limit: usize) -> Vec<&
 fn top_scored_brawlers<'a>(items: &'a [CatalogBrawler], qn: &str, limit: usize) -> Vec<&'a CatalogBrawler> {
     let mut scored = items
         .iter()
-        .filter_map(|item| score_match(qn, &item.norm).map(|s| (s, item)))
+        .filter_map(|item| {
+            let target_norm = if item.norm.is_empty() {
+                normalize_text(&item.name)
+            } else {
+                item.norm.clone()
+            };
+            score_match(qn, &target_norm).map(|s| (s, item))
+        })
         .collect::<Vec<_>>();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
     scored.into_iter().take(limit).map(|(_, item)| item).collect()
@@ -1306,6 +1338,14 @@ fn round2(value: f64) -> f64 {
 
 fn json_response(value: &Value, status: u16) -> Result<Response> {
     let mut resp = Response::from_json(value)?;
+    resp.headers_mut()
+        .set("content-type", "application/json; charset=utf-8")?;
+    resp.headers_mut().set("cache-control", "no-store")?;
+    Ok(resp.with_status(status))
+}
+
+fn json_text_response(body: &str, status: u16) -> Result<Response> {
+    let mut resp = Response::from_body(ResponseBody::Body(body.as_bytes().to_vec()))?;
     resp.headers_mut()
         .set("content-type", "application/json; charset=utf-8")?;
     resp.headers_mut().set("cache-control", "no-store")?;
