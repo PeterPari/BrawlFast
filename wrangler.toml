@@ -1,0 +1,28 @@
+name = "brawlfast-edge"
+main = "worker/build/worker/shim.mjs"
+compatibility_date = "2026-02-15"
+
+[build]
+command = "cd worker && worker-build --release"
+
+# Scheduled prefetching cron jobs
+# Runs every minute, but internal throttle limits actual execution to WARM_INTERVAL_SECONDS
+[triggers]
+crons = ["* * * * *"]
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+[[kv_namespaces]]
+binding = "BRAWLFAST_KV"
+id = "663c494cf5ed493a8bd9e7e588b1d220"
+preview_id = "8232f60f7b644fa0acd52fb4a13f59dd"
+
+[vars]
+BRAWL_API_BASE = "https://api.brawlify.com/v1"
+# How often to run full prefetch (in seconds). Minimum 30s.
+WARM_INTERVAL_SECONDS = "60"
+# Number of parallel requests during prefetch. Higher = faster but more API load.
+# Recommended: 8-12 for best balance of speed and API friendliness.
+WARM_CONCURRENCY = "8"

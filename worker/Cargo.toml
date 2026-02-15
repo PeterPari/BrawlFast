@@ -1,0 +1,30 @@
+[package]
+name = "brawlfast-worker"
+version = "0.1.0"
+edition = "2021"
+wasm-opt = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = "0.7.4"
+console_error_panic_hook = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+futures-util = "0.3"
+
+[profile.release]
+# Optimize for speed and small binary size
+opt-level = "z"        # Optimize for size (also improves speed in Wasm)
+lto = true             # Enable Link-Time Optimization for better inlining
+codegen-units = 1      # Better optimization, slower compile
+strip = true           # Remove debug symbols
+panic = "abort"        # Smaller binaries, faster panics
+
+[profile.dev]
+# Faster compilation during development
+opt-level = 0

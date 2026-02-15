@@ -611,6 +611,10 @@
         return `animation-delay:${Math.min(index * 35, 350)}ms`;
       }
 
+      function emptyTableRow(colspan, label) {
+        return `<tr><td colspan="${colspan}" class="mono" style="text-align:center; opacity:.75;">${label}</td></tr>`;
+      }
+
       function renderDetail(type, data) {
         showResult();
 
@@ -626,21 +630,21 @@
           brawlerTable.innerHTML = `
             <thead><tr><th>#</th><th>Tier</th><th>Brawler</th><th>Adj WR</th><th>Raw WR</th><th>Samples</th><th>Impact</th></tr></thead>
             <tbody>
-              ${(data.brawlers || []).map((item, index) => {
+              ${((data.brawlers || []).length ? (data.brawlers || []).map((item, index) => {
                 const adjusted = Number(item.adjustedWinRate ?? item.winRate ?? 0);
                 const t = tier(adjusted);
                 return `<tr class="row-in" style="${rowAnimDelay(index)}"><td class="mono">${index + 1}</td><td><span class="${tierClass(t)}">${t}</span></td><td>${titleCase(item.name)}</td><td class="mono">${safePct(adjusted)}</td><td class="mono">${safePct(item.winRate)}</td><td class="mono">${safeCount(item.count)}</td><td><div class="bar"><span style="width:${Math.min(adjusted, 100)}%"></span></div></td></tr>`;
-              }).join('')}
+              }).join('') : emptyTableRow(7, 'No brawler stats available for this map.'))}
             </tbody>
           `;
 
           teamTable.innerHTML = `
             <thead><tr><th>#</th><th>Team</th><th>Adj WR</th><th>Raw WR</th><th>Samples</th></tr></thead>
             <tbody>
-              ${(data.teams || []).map((item, index) => {
+              ${((data.teams || []).length ? (data.teams || []).map((item, index) => {
                 const adjusted = Number(item.adjustedWinRate ?? item.winRate ?? 0);
                 return `<tr class="row-in" style="${rowAnimDelay(index)}"><td class="mono">${index + 1}</td><td>${item.brawlers.map(titleCase).join(' + ')}</td><td class="mono">${safePct(adjusted)}</td><td class="mono">${safePct(item.winRate)}</td><td class="mono">${safeCount(item.count)}</td></tr>`;
-              }).join('')}
+              }).join('') : emptyTableRow(5, 'No team stats available for this map.'))}
             </tbody>
           `;
           return;
@@ -653,10 +657,10 @@
         bestMapTable.innerHTML = `
           <thead><tr><th>#</th><th>Map</th><th>Mode</th><th>Adj WR</th><th>Raw WR</th><th>Samples</th><th>Impact</th></tr></thead>
           <tbody>
-            ${(data.bestMaps || []).map((item, index) => {
+            ${((data.bestMaps || []).length ? (data.bestMaps || []).map((item, index) => {
               const adjusted = Number(item.adjustedWinRate ?? item.winRate ?? 0);
               return `<tr class="row-in" style="${rowAnimDelay(index)}"><td class="mono">${index + 1}</td><td>${titleCase(item.map)}</td><td>${titleCase(item.mode)}</td><td class="mono">${safePct(adjusted)}</td><td class="mono">${safePct(item.winRate)}</td><td class="mono">${safeCount(item.count)}</td><td><div class="bar"><span style="width:${Math.min(adjusted, 100)}%"></span></div></td></tr>`;
-            }).join('')}
+            }).join('') : emptyTableRow(7, 'No map stats available for this brawler.'))}
           </tbody>
         `;
       }

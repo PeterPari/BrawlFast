@@ -5,9 +5,17 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "edge:dev": "wrangler dev",
+    "edge:deploy": "wrangler deploy",
+    "edge:test-scheduled": "wrangler dev --test-scheduled",
+    "edge:build": "wrangler deploy --dry-run",
+    "edge:check-rust": "cd worker && cargo check"
   },
   "dependencies": {
     "express": "^4.18.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.65.0"
   }
 }

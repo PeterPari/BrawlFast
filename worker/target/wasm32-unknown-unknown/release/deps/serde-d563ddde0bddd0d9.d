@@ -1,0 +1,14 @@
+/Users/peterp/Projects/BrawlFast/worker/target/wasm32-unknown-unknown/release/deps/serde-d563ddde0bddd0d9.d: /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/peterp/Projects/BrawlFast/worker/target/wasm32-unknown-unknown/release/build/serde-8391e8d95a5e0d5c/out/private.rs
+
+/Users/peterp/Projects/BrawlFast/worker/target/wasm32-unknown-unknown/release/deps/libserde-d563ddde0bddd0d9.rlib: /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/peterp/Projects/BrawlFast/worker/target/wasm32-unknown-unknown/release/build/serde-8391e8d95a5e0d5c/out/private.rs
+
+/Users/peterp/Projects/BrawlFast/worker/target/wasm32-unknown-unknown/release/deps/libserde-d563ddde0bddd0d9.rmeta: /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/peterp/Projects/BrawlFast/worker/target/wasm32-unknown-unknown/release/build/serde-8391e8d95a5e0d5c/out/private.rs
+
+/Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/peterp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/peterp/Projects/BrawlFast/worker/target/wasm32-unknown-unknown/release/build/serde-8391e8d95a5e0d5c/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/peterp/Projects/BrawlFast/worker/target/wasm32-unknown-unknown/release/build/serde-8391e8d95a5e0d5c/out
