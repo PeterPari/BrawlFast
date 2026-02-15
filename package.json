@@ -1,0 +1,13 @@
+{
+  "name": "BrawlFast",
+  "version": "1.0.0",
+  "description": "Lightweight Brawl Stars proxy that strips and caches meta stats",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.0"
+  }
+}

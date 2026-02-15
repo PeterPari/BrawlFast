@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BrawlFast</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg-dark: #0f111a;
+        --bg-light: #1a1d2d;
+        --panel: rgba(26, 29, 45, 0.6);
+        --panel-border: rgba(255, 255, 255, 0.06);
+        --text-main: #f8fafc;
+        --text-muted: #94a3b8;
+        --accent: #6366f1; /* Indigo-500 */
+        --accent-glow: rgba(99, 102, 241, 0.4);
+        --success: #10b981;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --radius: 24px;
+        --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      
+      ::selection {
+        background: var(--accent-glow);
+        color: white;
+      }
+      
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 99px;
+        border: 2px solid transparent;
+        background-clip: content-box;
+      }
+      
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.2);
+        background-clip: content-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: var(--font-sans);
+        background-color: var(--bg-dark);
+        background-image: 
+          radial-gradient(circle at 50% -20%, #2e304f 0%, transparent 40%),
+          radial-gradient(circle at 80% 60%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
+          radial-gradient(circle at 20% 40%, rgba(16, 185, 129, 0.05) 0%, transparent 40%);
+        color: var(--text-main);
+        min-height: 100vh;
+        -webkit-font-smoothing: antialiased;
+        line-height: 1.6;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 60px 24px;
+      }
+
+      .logo {
+        height: 80px;
+        margin-bottom: 32px;
+        filter: drop-shadow(0 0 30px rgba(99, 102, 241, 0.5));
+        display: block;
+      }
+
+      h2 {
+        margin: 0 0 20px;
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        background: linear-gradient(to right, #fff, #94a3b8);
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        padding: 24px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+      }
+
+      .search-wrap {
+        position: relative;
+        padding: 0; 
+        border: none;
+        background: transparent;
+        box-shadow: none;
+        overflow: visible;
+        margin-bottom: 48px;
+        max-width: 800px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .search {
+        width: 100%;
+        border: 1px solid var(--panel-border);
+        border-radius: 99px;
+        padding: 20px 24px 20px 56px;
+        background: rgba(30, 41, 59, 0.6) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'%3E%3C/circle%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'%3E%3C/line%3E%3C/svg%3E") no-repeat 24px center;
+        background-size: 20px;
+        color: var(--text-main);
+        outline: none;
+        font-size: 18px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      }
+
+      .search::placeholder {
+        color: var(--text-muted);
+        opacity: 0.6;
+      }
+
+      .search:focus {
+        border-color: var(--accent);
+        background-color: rgba(30, 41, 59, 0.9);
+        box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.2), 0 10px 40px rgba(0,0,0,0.4);
+        transform: translateY(-2px);
+      }
+
+      .dropdown {
+        position: absolute;
+        width: 100%;
+        margin-top: 16px;
+        border: 1px solid var(--panel-border);
+        border-radius: 20px;
+        background: rgba(15, 23, 42, 0.95);
+        overflow: hidden;
+        display: none;
+        z-index: 100;
+        box-shadow: 0 20px 60px -10px rgba(0, 0, 0, 0.6);
+        transform-origin: top center;
+      }
+
+      .drop-section {
+        border-top: 1px solid rgba(255,255,255,0.05);
+      }
+      .drop-section:first-child { border-top: none; }
+
+      .drop-header {
+        font-size: 11px;
+        text-transform: uppercase;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        color: var(--text-muted);
+        padding: 16px 20px 8px;
+        opacity: 0.8;
+      }
+
+      .drop-item {
+        width: 100%;
+        border: 0;
+        background: transparent;
+        color: var(--text-main);
+        text-align: left;
+        padding: 14px 20px;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 15px;
+        transition: background 0.1s;
+        font-weight: 500;
+      }
+
+      .drop-item:hover, .drop-item.active {
+        background: rgba(99, 102, 241, 0.12);
+        color: #fff;
+      }
+
+      .tag {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--accent);
+        background: rgba(99, 102, 241, 0.15);
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        border-radius: 6px;
+        padding: 3px 8px;
+        letter-spacing: 0.05em;
+      }
+
+      .tag-map {
+        color: var(--accent);
+        background: rgba(99, 102, 241, 0.15);
+        border-color: rgba(99, 102, 241, 0.2);
+      }
+
+      .tag-brawler {
+        color: var(--success);
+        background: rgba(16, 185, 129, 0.15);
+        border-color: rgba(16, 185, 129, 0.2);
+      }
+
+      .tag-today {
+        margin-left: 8px;
+        color: #fbbf24;
+        background: rgba(251, 191, 36, 0.15);
+        border-color: rgba(251, 191, 36, 0.25);
+      }
+
+      .meta {
+        margin: -8px 0 32px;
+        font-size: 14px;
+        color: var(--text-muted);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px 24px;
+        background: rgba(30, 41, 59, 0.3);
+        border-radius: var(--radius);
+        border: 1px solid var(--panel-border);
+      }
+
+      .grid {
+        margin-top: 24px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+        gap: 32px;
+      }
+
+      .table-container {
+        overflow-x: auto;
+      }
+
+      .table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 14px;
+      }
+
+      .table th {
+        text-align: left;
+        color: var(--text-muted);
+        font-weight: 600;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--panel-border);
+        white-space: nowrap;
+      }
+
+      .table td {
+        padding: 14px 24px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        vertical-align: middle;
+        font-feature-settings: "tnum";
+      }
+      
+      .table tr:last-child td {
+        border-bottom: none;
+      }
+
+      .table tr:hover td {
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .mono {
+        font-family: var(--font-mono);
+        color: var(--text-muted);
+        font-size: 13px;
+      }
+
+      .tier {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        font-weight: 900;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid transparent;
+        transition: transform 0.2s;
+      }
+      
+      .tier:hover { transform: scale(1.1); }
+
+      .tier-s { 
+        color: #6ee7b7; 
+        background: rgba(5, 150, 105, 0.25); 
+        border-color: rgba(16, 185, 129, 0.3);
+        box-shadow: 0 0 20px rgba(16, 185, 129, 0.25);
+        text-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+      }
+      .tier-a { 
+        color: #7dd3fc; 
+        background: rgba(14, 165, 233, 0.2); 
+        border-color: rgba(56, 189, 248, 0.3);
+        text-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+      }
+      .tier-b { 
+        color: #fcd34d; 
+        background: rgba(217, 119, 6, 0.2); 
+        border-color: rgba(245, 158, 11, 0.3);
+      }
+      .tier-c { 
+        color: #fca5a5; 
+        background: rgba(220, 38, 38, 0.2); 
+        border-color: rgba(239, 68, 68, 0.3);
+      }
+
+      .bar {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 999px;
+        height: 6px;
+        width: 100px;
+        overflow: hidden;
+      }
+
+      .bar > span {
+        display: block;
+        height: 100%;
+        background: linear-gradient(90deg, var(--accent), #a78bfa);
+        border-radius: 999px;
+        box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+      }
+
+      .hidden { display: none !important; }
+
+      .loading {
+        margin: 20px 0;
+        background: transparent;
+        border-radius: var(--radius);
+        height: 60px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+        font-size: 16px;
+        letter-spacing: 0.05em;
+        font-weight: 500;
+      }
+      
+      .loading::after {
+        content: '';
+        width: 24px;
+        height: 24px;
+        border: 3px solid var(--accent);
+        border-top-color: transparent;
+        border-radius: 50%;
+        margin-left: 16px;
+        animation: spin 0.8s linear infinite;
+      }
+
+      .panel h3 {
+        margin: 0 0 16px;
+        font-size: 18px;
+        color: var(--text-main);
+      }
+
+      @keyframes spin { 
+        to { transform: rotate(360deg); } 
+      }
+
+      .row-in {
+        animation: fadeIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+        opacity: 0;
+        transform: translateY(12px);
+      }
+      
+      @keyframes fadeIn {
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      footer {
+        margin-top: 60px;
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 13px;
+        opacity: 0.6;
+        padding-bottom: 40px;
+      }
+
+      @media (max-width: 768px) {
+        .grid { grid-template-columns: 1fr; }
+        .container { padding: 32px 16px; }
+        h1 { font-size: 28px !important; }
+        .search-wrap { margin-bottom: 32px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <header style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
+        <img src="logo.svg" alt="BrawlFast" class="logo" style="margin-bottom: 0;" />
+        <h1 style="margin: 0; font-size: 36px; font-weight: 700; color: var(--text-main);">BrawlFast</h1>
+      </header>
+
+      <section class="panel search-wrap">
+        <input id="search" class="search" autocomplete="off" placeholder="Search maps or brawlers..." />
+        <div id="dropdown" class="dropdown"></div>
+      </section>
+
+      <div id="loading" class="loading hidden"></div>
+
+      <section id="result" class="hidden">
+        <div id="title"></div>
+        <div id="meta" class="meta"></div>
+        <div id="mapView" class="grid hidden">
+          <article class="panel">
+            <h3>Brawler Rankings</h3>
+            <div class="table-container">
+              <table class="table" id="brawlerTable"></table>
+            </div>
+          </article>
+          <article class="panel">
+            <h3>Best Teams</h3>
+            <div class="table-container">
+              <table class="table" id="teamTable"></table>
+            </div>
+          </article>
+        </div>
+        <div id="brawlerView" class="hidden panel">
+          <h3>Best Maps</h3>
+          <div class="table-container">
+            <table class="table" id="bestMapTable"></table>
+          </div>
+        </div>
+      </section>
+
+      <footer>Data from BrawlAPI · Cached 30 min · Not Supercell</footer>
+    </main>
+
+    <script>
+      const searchInput = document.getElementById('search');
+      const dropdown = document.getElementById('dropdown');
+      const result = document.getElementById('result');
+      const loading = document.getElementById('loading');
+      const title = document.getElementById('title');
+      const meta = document.getElementById('meta');
+      const mapView = document.getElementById('mapView');
+      const brawlerView = document.getElementById('brawlerView');
+      const brawlerTable = document.getElementById('brawlerTable');
+      const teamTable = document.getElementById('teamTable');
+      const bestMapTable = document.getElementById('bestMapTable');
+
+      let searchTimer = null;
+      let searchAbortController = null;
+      let activeItems = [];
+      let activeIndex = -1;
+
+      function tier(winRate) {
+        if (winRate >= 62) return 'S';
+        if (winRate >= 57) return 'A';
+        if (winRate >= 52) return 'B';
+        return 'C';
+      }
+
+      function tierClass(t) {
+        return `tier tier-${t.toLowerCase()}`;
+      }
+
+      function safePct(value) {
+        return `${Number(value).toFixed(1)}%`;
+      }
+
+      function safeCount(value) {
+        const n = Number(value || 0);
+        if (!Number.isFinite(n) || n <= 0) return '—';
+        return n.toLocaleString();
+      }
+
+      function titleCase(str) {
+        return str.toLowerCase().replace(/\b\w/g, l => l.toUpperCase());
+      }
+
+      function setLoading(state) {
+        loading.classList.toggle('hidden', !state);
+      }
+
+      function showResult() {
+        result.classList.remove('hidden');
+      }
+
+      function hideDropdown() {
+        dropdown.style.display = 'none';
+        dropdown.innerHTML = '';
+        activeItems = [];
+        activeIndex = -1;
+      }
+
+      function renderDropdown(data) {
+        const mapItems = [...(data.maps || [])]
+          .sort((a, b) => Number(Boolean(b.activeToday)) - Number(Boolean(a.activeToday)));
+        const brawlerItems = data.brawlers || [];
+
+        if (!mapItems.length && !brawlerItems.length) {
+          hideDropdown();
+          return;
+        }
+
+        let html = '';
+        activeItems = [];
+
+        if (mapItems.length) {
+          html += `<div class="drop-section"><div class="drop-header">Maps</div>`;
+          mapItems.forEach((item) => {
+            const order = activeItems.length;
+            activeItems.push({ type: 'map', id: item.id });
+            const todayTag = item.activeToday ? '<span class="tag tag-today">Today</span>' : '';
+            html += `<button class="drop-item" data-order="${order}"><span>${titleCase(item.name)} (${titleCase(item.mode)})</span><span><span class="tag tag-map">Map</span>${todayTag}</span></button>`;
+          });
+          html += '</div>';
+        }
+
+        if (brawlerItems.length) {
+          html += `<div class="drop-section"><div class="drop-header">Brawlers</div>`;
+          brawlerItems.forEach((item) => {
+            const order = activeItems.length;
+            activeItems.push({ type: 'brawler', id: item.id });
+            html += `<button class="drop-item" data-order="${order}"><span>${titleCase(item.name)}</span><span class="tag tag-brawler">Brawler</span></button>`;
+          });
+          html += '</div>';
+        }
+
+        dropdown.innerHTML = html;
+        dropdown.style.display = 'block';
+
+        [...dropdown.querySelectorAll('.drop-item')].forEach((button) => {
+          button.addEventListener('click', () => {
+            const order = Number(button.dataset.order);
+            const selected = activeItems[order];
+            if (selected) {
+              selectItem(selected.type, selected.id);
+            }
+          });
+        });
+      }
+
+      function activateIndex(index) {
+        const items = [...dropdown.querySelectorAll('.drop-item')];
+        items.forEach((item) => item.classList.remove('active'));
+        if (index >= 0 && items[index]) {
+          items[index].classList.add('active');
+        }
+      }
+
+      async function fetchSearch(query) {
+        if (searchAbortController) {
+          searchAbortController.abort();
+        }
+
+        searchAbortController = new AbortController();
+
+        try {
+          const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, {
+            signal: searchAbortController.signal
+          });
+          if (!res.ok) return { maps: [], brawlers: [] };
+          return res.json();
+        } catch (error) {
+          if (error.name === 'AbortError') {
+            return null;
+          }
+          return { maps: [], brawlers: [] };
+        }
+      }
+
+      async function selectItem(type, id) {
+        hideDropdown();
+        searchInput.blur();
+        setLoading(true);
+
+        const endpoint = type === 'map' ? `/api/map/${id}` : `/api/brawler/${id}`;
+        try {
+          const res = await fetch(endpoint);
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || 'Request failed');
+          }
+
+          renderDetail(type, data);
+        } catch (error) {
+          showResult();
+          title.innerHTML = '<h2>Error</h2>';
+          meta.innerHTML = `<span>${error.message}</span><span></span>`;
+          mapView.classList.add('hidden');
+          brawlerView.classList.add('hidden');
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function rowAnimDelay(index) {
+        return `animation-delay:${Math.min(index * 35, 350)}ms`;
+      }
+
+      function renderDetail(type, data) {
+        showResult();
+
+        const fetchMs = Number(data.fetchMs || 0);
+        const cacheText = data.cached ? (data.stale ? 'stale cache' : 'cache hit') : 'fresh fetch';
+        meta.innerHTML = `<span>source: ${data.source || 'brawlapi'} · ${cacheText}</span><span class="mono">fetched in ${fetchMs}ms</span>`;
+
+        if (type === 'map') {
+          mapView.classList.remove('hidden');
+          brawlerView.classList.add('hidden');
+          title.innerHTML = `<h2>${titleCase(data.map)} · ${titleCase(data.mode)}</h2>`;
+
+          brawlerTable.innerHTML = `
+            <thead><tr><th>#</th><th>Tier</th><th>Brawler</th><th>Adj WR</th><th>Raw WR</th><th>Samples</th><th>Impact</th></tr></thead>
+            <tbody>
+              ${(data.brawlers || []).map((item, index) => {
+                const adjusted = Number(item.adjustedWinRate ?? item.winRate ?? 0);
+                const t = tier(adjusted);
+                return `<tr class="row-in" style="${rowAnimDelay(index)}"><td class="mono">${index + 1}</td><td><span class="${tierClass(t)}">${t}</span></td><td>${titleCase(item.name)}</td><td class="mono">${safePct(adjusted)}</td><td class="mono">${safePct(item.winRate)}</td><td class="mono">${safeCount(item.count)}</td><td><div class="bar"><span style="width:${Math.min(adjusted, 100)}%"></span></div></td></tr>`;
+              }).join('')}
+            </tbody>
+          `;
+
+          teamTable.innerHTML = `
+            <thead><tr><th>#</th><th>Team</th><th>Adj WR</th><th>Raw WR</th><th>Samples</th></tr></thead>
+            <tbody>
+              ${(data.teams || []).map((item, index) => {
+                const adjusted = Number(item.adjustedWinRate ?? item.winRate ?? 0);
+                return `<tr class="row-in" style="${rowAnimDelay(index)}"><td class="mono">${index + 1}</td><td>${item.brawlers.map(titleCase).join(' + ')}</td><td class="mono">${safePct(adjusted)}</td><td class="mono">${safePct(item.winRate)}</td><td class="mono">${safeCount(item.count)}</td></tr>`;
+              }).join('')}
+            </tbody>
+          `;
+          return;
+        }
+
+        mapView.classList.add('hidden');
+        brawlerView.classList.remove('hidden');
+        title.innerHTML = `<h2>${titleCase(data.name)}</h2>`;
+
+        bestMapTable.innerHTML = `
+          <thead><tr><th>#</th><th>Map</th><th>Mode</th><th>Adj WR</th><th>Raw WR</th><th>Samples</th><th>Impact</th></tr></thead>
+          <tbody>
+            ${(data.bestMaps || []).map((item, index) => {
+              const adjusted = Number(item.adjustedWinRate ?? item.winRate ?? 0);
+              return `<tr class="row-in" style="${rowAnimDelay(index)}"><td class="mono">${index + 1}</td><td>${titleCase(item.map)}</td><td>${titleCase(item.mode)}</td><td class="mono">${safePct(adjusted)}</td><td class="mono">${safePct(item.winRate)}</td><td class="mono">${safeCount(item.count)}</td><td><div class="bar"><span style="width:${Math.min(adjusted, 100)}%"></span></div></td></tr>`;
+            }).join('')}
+          </tbody>
+        `;
+      }
+
+      searchInput.addEventListener('input', () => {
+        const query = searchInput.value.trim();
+        clearTimeout(searchTimer);
+
+        if (!query) {
+          hideDropdown();
+          return;
+        }
+
+        searchTimer = setTimeout(async () => {
+          const data = await fetchSearch(query);
+          if (data) {
+            renderDropdown(data);
+          }
+        }, 80);
+      });
+
+      searchInput.addEventListener('focus', async () => {
+        const query = searchInput.value.trim();
+        if (!query) return;
+        const data = await fetchSearch(query);
+        if (data) {
+          renderDropdown(data);
+        }
+      });
+
+      searchInput.addEventListener('keydown', (event) => {
+        if (!activeItems.length || dropdown.style.display === 'none') return;
+
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          activeIndex = Math.min(activeIndex + 1, activeItems.length - 1);
+          activateIndex(activeIndex);
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          activeIndex = Math.max(activeIndex - 1, 0);
+          activateIndex(activeIndex);
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          if (activeIndex < 0) {
+            activeIndex = 0;
+          }
+          const selected = activeItems[activeIndex];
+          if (selected) {
+            selectItem(selected.type, selected.id);
+          }
+        }
+
+        if (event.key === 'Escape') {
+          hideDropdown();
+        }
+      });
+
+      document.addEventListener('click', (event) => {
+        if (!dropdown.contains(event.target) && event.target !== searchInput) {
+          hideDropdown();
+        }
+      });
+    </script>
+  </body>
+</html>
