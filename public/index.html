@@ -189,6 +189,15 @@
         color: #fff;
       }
 
+      .drop-item.live-map {
+        background: rgba(251, 191, 36, 0.08);
+        border-left: 3px solid #fbbf24;
+      }
+
+      .drop-item.live-map:hover, .drop-item.live-map.active {
+        background: rgba(251, 191, 36, 0.15);
+      }
+
       .tag {
         font-size: 11px;
         font-weight: 700;
@@ -422,14 +431,14 @@
       <section id="result" class="hidden">
         <div id="title"></div>
         <div id="meta" class="meta"></div>
-        <div id="mapView" class="grid hidden">
+        <div id="mapView" class="hidden">
           <article class="panel">
             <h3>Brawler Rankings</h3>
             <div class="table-container">
               <table class="table" id="brawlerTable"></table>
             </div>
           </article>
-          <article class="panel">
+          <article class="panel" style="margin-top: 32px;">
             <h3>Best Teams</h3>
             <div class="table-container">
               <table class="table" id="teamTable"></table>
@@ -523,8 +532,9 @@
           mapItems.forEach((item) => {
             const order = activeItems.length;
             activeItems.push({ type: 'map', id: item.id });
-            const todayTag = item.activeToday ? '<span class="tag tag-today">Today</span>' : '';
-            html += `<button class="drop-item" data-order="${order}"><span>${titleCase(item.name)} (${titleCase(item.mode)})</span><span><span class="tag tag-map">Map</span>${todayTag}</span></button>`;
+            const liveTag = item.activeToday ? '<span class="tag tag-today">LIVE</span>' : '';
+            const liveClass = item.activeToday ? ' live-map' : '';
+            html += `<button class="drop-item${liveClass}" data-order="${order}"><span>${titleCase(item.name)} (${titleCase(item.mode)})</span><span><span class="tag tag-map">Map</span>${liveTag}</span></button>`;
           });
           html += '</div>';
         }
@@ -624,12 +634,13 @@
           title.innerHTML = `<h2>${titleCase(data.map)} · ${titleCase(data.mode)}</h2>`;
 
           brawlerTable.innerHTML = `
-            <thead><tr><th>#</th><th>Tier</th><th>Brawler</th><th>Adj WR</th><th>Raw WR</th><th>Samples</th><th>Impact</th></tr></thead>
+            <thead><tr><th>#</th><th>Tier</th><th>Brawler</th><th>BrawlFast Score</th><th>Adj WR</th><th>Raw WR</th><th>Samples</th><th>Impact</th></tr></thead>
             <tbody>
               ${(data.brawlers || []).map((item, index) => {
                 const adjusted = Number(item.adjustedWinRate ?? item.winRate ?? 0);
-                const t = tier(adjusted);
-                return `<tr class="row-in" style="${rowAnimDelay(index)}"><td class="mono">${index + 1}</td><td><span class="${tierClass(t)}">${t}</span></td><td>${titleCase(item.name)}</td><td class="mono">${safePct(adjusted)}</td><td class="mono">${safePct(item.winRate)}</td><td class="mono">${safeCount(item.count)}</td><td><div class="bar"><span style="width:${Math.min(adjusted, 100)}%"></span></div></td></tr>`;
+                const t = item.tier || tier(adjusted);
+                const cpsScore = item.cps ? (item.cps * 100).toFixed(1) : '—';
+                return `<tr class="row-in" style="${rowAnimDelay(index)}"><td class="mono">${index + 1}</td><td><span class="${tierClass(t)}">${t}</span></td><td>${titleCase(item.name)}</td><td class="mono" style="font-weight: 600; color: var(--accent);">${cpsScore}</td><td class="mono">${safePct(adjusted)}</td><td class="mono">${safePct(item.winRate)}</td><td class="mono">${safeCount(item.count)}</td><td><div class="bar"><span style="width:${Math.min(adjusted, 100)}%"></span></div></td></tr>`;
               }).join('')}
             </tbody>
           `;

@@ -1,4 +1,17 @@
 const express = require('express');
+const { mean, standardDeviation, zScore } = require('./lib/statistics');
+const {
+  calculateBayesianConfidence,
+  calculateTimeWeightedWinRate,
+  normalizeMapType,
+  getMapTypeWeights,
+  calculatePairwiseSynergy,
+  calculateUseRateScore,
+  calculateCounterMetaScore,
+  computeCPS,
+  assignTiers,
+  MapType
+} = require('./lib/rankingEngine');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -29,7 +42,6 @@ if (CORS_ORIGIN) {
 app.use(express.static('public'));
 
 const cache = new Map();
-const cacheOrder = [];
 
 const catalog = {
   maps: [],
@@ -50,32 +62,26 @@ function getCached(key, ttl) {
   }
 
   if (now() - entry.ts < ttl) {
+    // Move to end (mark as recently used)
+    cache.delete(key);
+    cache.set(key, entry);
     return entry.data;
   }
 
   cache.delete(key);
-  const index = cacheOrder.indexOf(key);
-  if (index !== -1) {
-    cacheOrder.splice(index, 1);
-  }
   return null;
 }
 
-function evictOldestIfNeeded() {
-  while (cache.size > MAX_CACHE_ENTRIES) {
-    const oldestKey = cacheOrder.shift();
-    if (oldestKey) {
-      cache.delete(oldestKey);
-    }
-  }
-}
-
 function setCache(key, data) {
-  if (!cache.has(key)) {
-    cacheOrder.push(key);
+  if (cache.has(key)) {
+    cache.delete(key);
   }
   cache.set(key, { data, ts: now() });
-  evictOldestIfNeeded();
+
+  if (cache.size > MAX_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    cache.delete(oldestKey);
+  }
 }
 
 function getCacheStats() {
@@ -155,13 +161,31 @@ function searchCatalog(query) {
     return { maps: [], brawlers: [] };
   }
 
-  const maps = topScored(catalog.maps, queryNorm, 8).map(({ id, name, mode }) => ({
-    id,
-    name,
-    mode,
-    activeToday: catalog.activeMapIds.has(Number(id)),
-  }));
-  const brawlers = topScored(catalog.brawlers, queryNorm, 8).map(({ id, name }) => ({ id, name }));
+  // Get top scored items and deduplicate by display key (name+mode for maps, name for brawlers)
+  const mapResults = topScored(catalog.maps, queryNorm, 20); // Get more to account for duplicates
+  const mapsByKey = new Map();
+  mapResults.forEach(({ id, name, mode }) => {
+    const mapKey = `${name.toLowerCase()}|${mode.toLowerCase()}`;
+    if (!mapsByKey.has(mapKey)) {
+      mapsByKey.set(mapKey, {
+        id,
+        name,
+        mode,
+        activeToday: catalog.activeMapIds.has(Number(id)),
+      });
+    }
+  });
+  const maps = Array.from(mapsByKey.values()).slice(0, 8);
+
+  const brawlerResults = topScored(catalog.brawlers, queryNorm, 20);
+  const brawlersByName = new Map();
+  brawlerResults.forEach(({ id, name }) => {
+    const brawlerKey = name.toLowerCase();
+    if (!brawlersByName.has(brawlerKey)) {
+      brawlersByName.set(brawlerKey, { id, name });
+    }
+  });
+  const brawlers = Array.from(brawlersByName.values()).slice(0, 8);
 
   return { maps, brawlers };
 }
@@ -230,6 +254,17 @@ function sortByAdjustedThenRaw(a, b) {
   const countB = Number(b.count || 0);
   return countB - countA;
 }
+
+// ============================================================================
+// RANKING ALGORITHM FUNCTIONS
+// ============================================================================
+// These functions have been extracted to modules for better maintainability:
+// - lib/statistics.js: mean, standardDeviation, zScore
+// - lib/rankingEngine.js: All ranking algorithm functions
+// - config/ranking.config.js: Tunable parameters
+//
+// Functions are imported at the top of this file and used as before.
+// ============================================================================
 
 function resolveBrawlerName(rawBrawler, brawlerNameById) {
   if (typeof rawBrawler === 'string') {
@@ -325,22 +360,38 @@ function stripMapResponse(raw, brawlerNameById) {
     .concat(safeArray(raw.teams))
     .concat(safeArray(raw.meta?.teams));
 
-  const brawlers = brawlerCandidates
+  // Deduplicate brawlers by name (keep first occurrence)
+  const brawlersByName = new Map();
+  brawlerCandidates
     .map((entry) => parseMapStatEntry(entry, brawlerNameById))
-    .filter(Boolean);
+    .filter(Boolean)
+    .forEach((brawler) => {
+      if (!brawlersByName.has(brawler.name)) {
+        brawlersByName.set(brawler.name, brawler);
+      }
+    });
+  const brawlers = Array.from(brawlersByName.values());
 
   const brawlerPrior = computePriorFromEntries(brawlers);
-  const rankedBrawlers = brawlers
+  let rankedBrawlers = brawlers
     .map((entry) => ({
       ...entry,
       adjustedWinRate: computeAdjustedWinRate(entry.winRate, entry.count, brawlerPrior),
     }))
-    .sort(sortByAdjustedThenRaw)
-    .slice(0, 20);
+    .sort(sortByAdjustedThenRaw);
 
-  let teams = teamCandidates
+  // Deduplicate teams by sorted brawler names (keep first occurrence)
+  const teamsByKey = new Map();
+  teamCandidates
     .map((entry) => parseTeamEntry(entry, brawlerNameById))
-    .filter(Boolean);
+    .filter(Boolean)
+    .forEach((team) => {
+      const teamKey = [...team.brawlers].sort().join('|');
+      if (!teamsByKey.has(teamKey)) {
+        teamsByKey.set(teamKey, team);
+      }
+    });
+  let teams = Array.from(teamsByKey.values());
 
   const teamPrior = computePriorFromEntries(teams);
   teams = teams
@@ -352,8 +403,27 @@ function stripMapResponse(raw, brawlerNameById) {
     .slice(0, 20);
 
   if (teams.length === 0) {
-    teams = buildFallbackTeamsFromBrawlers(rankedBrawlers);
+    teams = buildFallbackTeamsFromBrawlers(rankedBrawlers.slice(0, 20));
   }
+
+  const mapType = modeName(raw);
+  rankedBrawlers = rankedBrawlers.map((brawler) => ({
+    ...brawler,
+    cps: computeCPS(brawler, rankedBrawlers, teams, mapType),
+  }));
+
+  rankedBrawlers = assignTiers(rankedBrawlers);
+
+  rankedBrawlers.sort((a, b) => {
+    const cpsA = toNum(a.cps) ?? -999;
+    const cpsB = toNum(b.cps) ?? -999;
+    if (cpsA !== cpsB) {
+      return cpsB - cpsA;
+    }
+    return sortByAdjustedThenRaw(a, b);
+  });
+
+  rankedBrawlers = rankedBrawlers.slice(0, 20);
 
   return {
     map: raw.name,
@@ -428,14 +498,23 @@ function stripBrawlerResponse(raw, requestedId) {
     .concat(safeArray(raw.bestMaps))
     .concat(safeArray(raw.meta?.maps));
 
-  const bestMaps = bestMapsCandidates
+  // Deduplicate best maps by map name (keep first/best occurrence)
+  const bestMapsByName = new Map();
+  bestMapsCandidates
     .map(parseBestMapEntry)
     .filter(Boolean)
-    .map((entry) => ({
-      ...entry,
-      count: 0,
-      adjustedWinRate: computeAdjustedWinRate(entry.winRate, 0, DEFAULT_PRIOR_WIN_RATE),
-    }))
+    .forEach((entry) => {
+      const mapKey = `${entry.map}|${entry.mode}`;
+      if (!bestMapsByName.has(mapKey)) {
+        bestMapsByName.set(mapKey, {
+          ...entry,
+          count: 0,
+          adjustedWinRate: computeAdjustedWinRate(entry.winRate, 0, DEFAULT_PRIOR_WIN_RATE),
+        });
+      }
+    });
+
+  const bestMaps = Array.from(bestMapsByName.values())
     .sort(sortByAdjustedThenRaw)
     .slice(0, 25);
 
@@ -465,14 +544,25 @@ async function fetchJson(path) {
 
 async function fetchMaps() {
   const payload = await fetchJson('/maps');
-  return safeArray(payload?.list || payload?.items || payload).map((item) => ({
+  const allMaps = safeArray(payload?.list || payload?.items || payload).map((item) => ({
     id: item.id,
     name: item.name,
     mode: modeName(item),
     stats: safeArray(item.stats),
     teamStats: safeArray(item.teamStats),
     _norm: normalizeText(item.name),
+    _raw: item,
   })).filter((item) => item.id && item.name);
+
+  // Deduplicate by ID (keep first occurrence)
+  const mapsById = new Map();
+  allMaps.forEach((map) => {
+    const mapId = Number(map.id);
+    if (!mapsById.has(mapId)) {
+      mapsById.set(mapId, map);
+    }
+  });
+  return Array.from(mapsById.values());
 }
 
 async function fetchActiveMapIds() {
@@ -510,11 +600,22 @@ async function fetchActiveMapIds() {
 
 async function fetchBrawlers() {
   const payload = await fetchJson('/brawlers');
-  return safeArray(payload?.list || payload?.items || payload).map((item) => ({
+  const allBrawlers = safeArray(payload?.list || payload?.items || payload).map((item) => ({
     id: item.id,
     name: item.name,
     _norm: normalizeText(item.name),
+    _raw: item,
   })).filter((item) => item.id && item.name);
+
+  // Deduplicate by ID (keep first occurrence)
+  const brawlersById = new Map();
+  allBrawlers.forEach((brawler) => {
+    const brawlerId = Number(brawler.id);
+    if (!brawlersById.has(brawlerId)) {
+      brawlersById.set(brawlerId, brawler);
+    }
+  });
+  return Array.from(brawlersById.values());
 }
 
 async function fetchMap(id) {
@@ -570,14 +671,22 @@ function bestSuggestionsFromCatalog(type, query = '', limit = 5) {
 
 app.get('/api/search', (req, res) => {
   const q = String(req.query.q || '').trim();
-  const result = searchCatalog(q);
-  res.json(result);
+  return res.json(searchCatalog(q));
 });
-
 app.get('/api/map/:id', async (req, res) => {
   const { id } = req.params;
   const cacheKey = `map:${id}`;
   const startedAt = now();
+
+  // If caller explicitly wants the raw Brawlify payload, proxy it unchanged
+  if (String(req.query.raw || '') === 'true') {
+    try {
+      const raw = await fetchMap(id);
+      return res.json(raw);
+    } catch (error) {
+      return res.status(502).json({ error: 'Unable to fetch raw map data', detail: error.message });
+    }
+  }
 
   const cached = getCached(cacheKey, CACHE_TTL);
   if (cached) {
@@ -631,6 +740,16 @@ app.get('/api/brawler/:id', async (req, res) => {
   const { id } = req.params;
   const cacheKey = `brawler:${id}`;
   const startedAt = now();
+
+  // raw=true → proxy the exact Brawlify payload
+  if (String(req.query.raw || '') === 'true') {
+    try {
+      const raw = await fetchBrawler(id);
+      return res.json(raw);
+    } catch (error) {
+      return res.status(502).json({ error: 'Unable to fetch raw brawler data', detail: error.message });
+    }
+  }
 
   const cached = getCached(cacheKey, CACHE_TTL);
   if (cached) {
