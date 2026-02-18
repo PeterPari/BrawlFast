@@ -1,0 +1,470 @@
+openapi: 3.0.3
+info:
+  title: BrawlFast API
+  description: |
+    Lightweight Brawl Stars proxy that fetches stats from BrawlAPI, 
+    strips responses down to core meta data, and serves fast JSON responses.
+    
+    Features advanced ranking algorithm with Bayesian statistics, 
+    time-weighted performance, and team synergy analysis.
+  version: 1.0.0
+  contact:
+    name: BrawlFast API
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://brawlfast.example.com
+    description: Production server
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns server status, cache information, and basic metrics
+      tags:
+        - System
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                cacheSize: 245
+                cacheMax: 500
+                catalogAge: 2h15m
+                metrics:
+                  uptime: 3600.5
+                  requests: 1250
+                  averageResponseTime: 12
+                  cacheHitRate: 78.5
+                  upstreamFailures: 2
+
+  /metrics:
+    get:
+      summary: Detailed metrics endpoint
+      description: Returns comprehensive performance and usage metrics
+      tags:
+        - System
+      responses:
+        '200':
+          description: Metrics data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+
+  /api/search:
+    get:
+      summary: Search brawlers and maps
+      description: Fuzzy search across brawler and map catalogs
+      tags:
+        - Search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query
+          schema:
+            type: string
+            maxLength: 100
+          example: "sna"
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results (default: 20, max: 50)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+              example: ["Shelly", "Spike"]
+        '400':
+          description: Invalid search query
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitError'
+
+  /api/map/{id}:
+    get:
+      summary: Get map metadata
+      description: Returns stripped map data with brawler rankings and team compositions
+      tags:
+        - Maps
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Numeric map ID
+          schema:
+            type: string
+            pattern: '^\d+$'
+          example: "15000001"
+        - name: raw
+          in: query
+          required: false
+          description: Return raw BrawlAPI response instead of processed data
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Map data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MapResponse'
+        '404':
+          description: Map not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotFoundError'
+        '502':
+          description: Upstream API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpstreamError'
+
+  /api/brawler/{id}:
+    get:
+      summary: Get brawler metadata
+      description: Returns stripped brawler data with best maps and performance metrics
+      tags:
+        - Brawlers
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Numeric brawler ID
+          schema:
+            type: string
+            pattern: '^\d+$'
+          example: "16000000"
+        - name: raw
+          in: query
+          required: false
+          description: Return raw BrawlAPI response instead of processed data
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Brawler data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrawlerResponse'
+        '404':
+          description: Brawler not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotFoundError'
+        '502':
+          description: Upstream API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpstreamError'
+
+  /api/live:
+    get:
+      summary: Get active maps
+      description: Returns currently active maps with top brawler rankings
+      tags:
+        - Maps
+      responses:
+        '200':
+          description: Active maps data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LiveMap'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        cacheSize:
+          type: integer
+          description: Current number of cached entries
+        cacheMax:
+          type: integer
+          description: Maximum cache capacity
+        catalogAge:
+          type: string
+          description: Age of catalog data (e.g., "2h15m")
+        metrics:
+          type: object
+          properties:
+            uptime:
+              type: number
+              description: Server uptime in seconds
+            requests:
+              type: integer
+              description: Total requests served
+            averageResponseTime:
+              type: integer
+              description: Average response time in milliseconds
+            cacheHitRate:
+              type: number
+              description: Cache hit rate percentage
+            upstreamFailures:
+              type: integer
+              description: Number of upstream API failures
+
+    MetricsResponse:
+      type: object
+      properties:
+        requests:
+          type: object
+          properties:
+            total:
+              type: integer
+            averageResponseTime:
+              type: number
+            byEndpoint:
+              type: object
+              additionalProperties:
+                type: integer
+            byStatus:
+              type: object
+              additionalProperties:
+                type: integer
+        cache:
+          type: object
+          properties:
+            hits:
+              type: integer
+            misses:
+              type: integer
+            evictions:
+              type: integer
+            size:
+              type: integer
+            hitRate:
+              type: number
+        api:
+          type: object
+          properties:
+            upstreamRequests:
+              type: integer
+            upstreamFailures:
+              type: integer
+            upstreamResponseTime:
+              type: number
+        errors:
+          type: object
+          properties:
+            total:
+              type: integer
+            byType:
+              type: object
+              additionalProperties:
+                type: integer
+        responseTimePercentiles:
+          type: object
+          properties:
+            p50:
+              type: number
+            p90:
+              type: number
+            p95:
+              type: number
+            p99:
+              type: number
+
+    MapResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        mode:
+          type: string
+        brawlers:
+          type: array
+          items:
+            $ref: '#/components/schemas/RankedBrawler'
+        teams:
+          type: array
+          items:
+            $ref: '#/components/schemas/RankedTeam'
+        isActive:
+          type: boolean
+        cached:
+          type: boolean
+        fetchMs:
+          type: integer
+
+    BrawlerResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        bestMaps:
+          type: array
+          items:
+            $ref: '#/components/schemas/BestMap'
+        cached:
+          type: boolean
+        fetchMs:
+          type: integer
+
+    RankedBrawler:
+      type: object
+      properties:
+        name:
+          type: string
+        winRate:
+          type: number
+        adjustedWinRate:
+          type: number
+        useRate:
+          type: number
+        count:
+          type: integer
+        tier:
+          type: string
+          enum: [S, A, B, C, F]
+
+    RankedTeam:
+      type: object
+      properties:
+        brawlers:
+          type: array
+          items:
+            type: string
+        winRate:
+          type: number
+        adjustedWinRate:
+          type: number
+        count:
+          type: integer
+
+    BestMap:
+      type: object
+      properties:
+        map:
+          type: string
+        mode:
+          type: string
+        winRate:
+          type: number
+        adjustedWinRate:
+          type: number
+
+    LiveMap:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        mode:
+          type: string
+        brawlers:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              winRate:
+                type: number
+              tier:
+                type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+
+    NotFoundError:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+
+    UpstreamError:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+
+    RateLimitError:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+        limit:
+          type: integer
+        windowMs:
+          type: integer
+        retryAfter:
+          type: integer
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+tags:
+  - name: System
+    description: System health and monitoring endpoints
+  - name: Search
+    description: Search functionality
+  - name: Maps
+    description: Map-related endpoints
+  - name: Brawlers
+    description: Brawler-related endpoints

@@ -1,43 +1,80 @@
 const express = require('express');
-const { mean, standardDeviation, zScore } = require('./lib/statistics');
 const {
-  calculateBayesianConfidence,
-  calculateTimeWeightedWinRate,
-  normalizeMapType,
-  getMapTypeWeights,
-  calculatePairwiseSynergy,
-  calculateUseRateScore,
-  calculateCounterMetaScore,
   computeCPS,
+  rankBrawlers,
   assignTiers,
   MapType
 } = require('./lib/rankingEngine');
+const { logger } = require('./lib/logger');
+const { createApiLimiter, createSearchLimiter } = require('./lib/rateLimiter');
+const {
+  securityHeaders,
+  validateSearchQuery,
+  validateMapId,
+  validateBrawlerId,
+  validateLimit,
+  requestSizeLimit
+} = require('./lib/security');
+const { metrics } = require('./lib/metrics');
+const {
+  safeArray,
+  toNum,
+  modeName,
+  resolveBrawlerName,
+  normalizeText
+} = require('./lib/utils');
+const {
+  topScored,
+  scoreMatch
+} = require('./lib/search');
+const brawlApi = require('./lib/brawlApi');
+const config = require('./config/ranking.config');
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json());
 
-const PORT = Number(process.env.PORT || 3000);
-const CACHE_TTL = Number(process.env.CACHE_TTL || 30 * 60 * 1000);
-const CATALOG_TTL = Number(process.env.CATALOG_TTL || 6 * 60 * 60 * 1000);
-const CORS_ORIGIN = process.env.CORS_ORIGIN;
-const BRAWL_API_BASE = process.env.BRAWL_API_BASE || 'https://api.brawlify.com/v1';
-const MAX_CACHE_ENTRIES = 500;
-const FETCH_TIMEOUT_MS = 8000;
-const PRIOR_WEIGHT = Number(process.env.PRIOR_WEIGHT || 1500);
-const DEFAULT_PRIOR_WIN_RATE = Number(process.env.DEFAULT_PRIOR_WIN_RATE || 50);
+// Apply security middleware
+app.use(securityHeaders);
+app.use(requestSizeLimit);
 
-if (CORS_ORIGIN) {
-  app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', CORS_ORIGIN);
+// Dynamic CORS middleware
+app.use((req, res, next) => {
+  const origin = process.env.CORS_ORIGIN;
+  if (origin) {
+    res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Methods', 'GET,OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(204);
     }
-    return next();
-  });
-}
+  }
+  next();
+});
+
+app.use(express.json());
+
+// Apply logging middleware
+app.use(logger.requestLogger());
+app.use(logger.errorLogger());
+
+// Apply metrics middleware
+app.use(metrics.middleware());
+
+const PORT = Number(process.env.PORT || 3000);
+const CACHE_TTL = Number(process.env.CACHE_TTL || 30 * 60 * 1000);
+const CATALOG_TTL = Number(process.env.CATALOG_TTL || 1 * 60 * 60 * 1000);
+const EVENTS_TTL = Number(process.env.EVENTS_TTL || 10 * 60 * 1000);
+const MAX_CACHE_ENTRIES = 500;
+const PRIOR_WEIGHT = Number(process.env.PRIOR_WEIGHT || config.bayesianPriors.weight);
+const DEFAULT_PRIOR_WIN_RATE = Number(process.env.DEFAULT_PRIOR_WIN_RATE || config.bayesianPriors.defaultWinRate);
+
+// Apply rate limiting (use the middleware function from RateLimiter)
+const apiLimiter = createApiLimiter().middleware();
+const searchLimiter = createSearchLimiter().middleware();
+
+// Apply rate limiters to API endpoints
+app.use('/api', apiLimiter);
+app.use('/api/search', searchLimiter);
 
 app.use(express.static('public'));
 
@@ -58,6 +95,8 @@ function now() {
 function getCached(key, ttl) {
   const entry = cache.get(key);
   if (!entry) {
+    logger.debug('Cache miss', { key });
+    metrics.recordCacheMiss(key);
     return null;
   }
 
@@ -65,10 +104,14 @@ function getCached(key, ttl) {
     // Move to end (mark as recently used)
     cache.delete(key);
     cache.set(key, entry);
+    logger.debug('Cache hit', { key, age: now() - entry.ts });
+    metrics.recordCacheHit(key);
     return entry.data;
   }
 
   cache.delete(key);
+  logger.debug('Cache expired', { key, age: now() - entry.ts });
+  metrics.recordCacheMiss(key);
   return null;
 }
 
@@ -77,10 +120,16 @@ function setCache(key, data) {
     cache.delete(key);
   }
   cache.set(key, { data, ts: now() });
+  
+  logger.debug('Cache set', { key, cacheSize: cache.size });
+  metrics.updateCacheSize(cache.size);
 
   if (cache.size > MAX_CACHE_ENTRIES) {
     const oldestKey = cache.keys().next().value;
     cache.delete(oldestKey);
+    logger.debug('Cache evicted', { evictedKey: oldestKey, cacheSize: cache.size });
+    metrics.recordCacheEviction(oldestKey);
+    metrics.updateCacheSize(cache.size);
   }
 }
 
@@ -91,87 +140,37 @@ function getCacheStats() {
   };
 }
 
-function normalizeText(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[\s\-_'’]/g, '');
-}
-
-function levenshtein(a, b) {
-  const lenA = a.length;
-  const lenB = b.length;
-
-  if (lenA === 0) return lenB;
-  if (lenB === 0) return lenA;
-
-  const dp = Array.from({ length: lenA + 1 }, () => new Array(lenB + 1).fill(0));
-
-  for (let i = 0; i <= lenA; i += 1) dp[i][0] = i;
-  for (let j = 0; j <= lenB; j += 1) dp[0][j] = j;
-
-  for (let i = 1; i <= lenA; i += 1) {
-    for (let j = 1; j <= lenB; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + cost,
-      );
-    }
-  }
-
-  return dp[lenA][lenB];
-}
-
-function scoreMatch(queryNorm, targetNorm) {
-  if (!queryNorm || !targetNorm) return null;
-
-  if (targetNorm.startsWith(queryNorm)) {
-    return 100;
-  }
-
-  if (targetNorm.includes(queryNorm)) {
-    return 80;
-  }
-
-  const distance = levenshtein(queryNorm, targetNorm);
-  if (distance <= 2) {
-    return 60 - distance * 10;
-  }
-
-  return null;
-}
-
-function topScored(items, queryNorm, limit = 8) {
-  return items
-    .map((item) => {
-      const score = scoreMatch(queryNorm, item._norm);
-      if (score == null) return null;
-      return { score, item };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name))
-    .slice(0, limit)
-    .map((entry) => entry.item);
-}
-
 function searchCatalog(query) {
   const queryNorm = normalizeText(query);
   if (!queryNorm) {
     return { maps: [], brawlers: [] };
   }
 
-  // Get top scored items and deduplicate by display key (name+mode for maps, name for brawlers)
-  const mapResults = topScored(catalog.maps, queryNorm, 20); // Get more to account for duplicates
+  // Get raw matches for maps with scores
+  const mapMatches = catalog.maps
+    .map((item) => {
+      const score = scoreMatch(queryNorm, item._norm);
+      if (score == null) return null;
+      
+      // Add a boost for active maps, but don't let it override primary matches
+      const isActive = catalog.activeMapIds.has(Number(item.id));
+      const finalScore = score + (isActive ? 15 : 0);
+      
+      return { score: finalScore, item };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name));
+
+  // Deduplicate by display key (name+mode for maps)
   const mapsByKey = new Map();
-  mapResults.forEach(({ id, name, mode }) => {
-    const mapKey = `${name.toLowerCase()}|${mode.toLowerCase()}`;
+  mapMatches.forEach(({ item }) => {
+    const mapKey = `${item.name.toLowerCase()}|${item.mode.toLowerCase()}`;
     if (!mapsByKey.has(mapKey)) {
       mapsByKey.set(mapKey, {
-        id,
-        name,
-        mode,
-        activeToday: catalog.activeMapIds.has(Number(id)),
+        id: item.id,
+        name: item.name,
+        mode: item.mode,
+        activeToday: catalog.activeMapIds.has(Number(item.id)),
       });
     }
   });
@@ -188,19 +187,6 @@ function searchCatalog(query) {
   const brawlers = Array.from(brawlersByName.values()).slice(0, 8);
 
   return { maps, brawlers };
-}
-
-function safeArray(value) {
-  return Array.isArray(value) ? value : [];
-}
-
-function toNum(value) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
-}
-
-function modeName(raw) {
-  return raw?.gameMode?.name || raw?.mode?.name || raw?.mode || raw?.gameMode || 'Unknown';
 }
 
 function computeAdjustedWinRate(winRate, sampleSize, priorWinRate = DEFAULT_PRIOR_WIN_RATE) {
@@ -266,27 +252,6 @@ function sortByAdjustedThenRaw(a, b) {
 // Functions are imported at the top of this file and used as before.
 // ============================================================================
 
-function resolveBrawlerName(rawBrawler, brawlerNameById) {
-  if (typeof rawBrawler === 'string') {
-    return rawBrawler;
-  }
-
-  if (typeof rawBrawler === 'number') {
-    return brawlerNameById.get(rawBrawler) || null;
-  }
-
-  if (rawBrawler && typeof rawBrawler === 'object') {
-    if (rawBrawler.name) {
-      return rawBrawler.name;
-    }
-    if (rawBrawler.id) {
-      return brawlerNameById.get(Number(rawBrawler.id)) || null;
-    }
-  }
-
-  return null;
-}
-
 function parseMapStatEntry(entry, brawlerNameById) {
   const name = resolveBrawlerName(entry?.brawler ?? entry?.id ?? entry?.name, brawlerNameById) || entry?.name || null;
   const winRate = toNum(entry?.winRate ?? entry?.stats?.winRate ?? entry?.winrate);
@@ -344,12 +309,7 @@ function buildFallbackTeamsFromBrawlers(brawlers) {
   return teams;
 }
 
-function stripMapResponse(raw, brawlerNameById) {
-  if (!raw || typeof raw !== 'object' || !raw.id || !raw.name) {
-    console.warn('[BrawlAPI] Unexpected map response shape');
-    return null;
-  }
-
+function getRankedBrawlers(raw, brawlerNameById) {
   const brawlerCandidates = safeArray(raw.stats)
     .concat(safeArray(raw.stats?.brawlers))
     .concat(safeArray(raw.brawlers))
@@ -371,6 +331,10 @@ function stripMapResponse(raw, brawlerNameById) {
       }
     });
   const brawlers = Array.from(brawlersByName.values());
+
+  if (brawlers.length === 0) {
+    return [];
+  }
 
   const brawlerPrior = computePriorFromEntries(brawlers);
   let rankedBrawlers = brawlers
@@ -407,28 +371,55 @@ function stripMapResponse(raw, brawlerNameById) {
   }
 
   const mapType = modeName(raw);
-  rankedBrawlers = rankedBrawlers.map((brawler) => ({
-    ...brawler,
-    cps: computeCPS(brawler, rankedBrawlers, teams, mapType),
-  }));
+  return rankBrawlers(rankedBrawlers, teams, mapType);
+}
 
-  rankedBrawlers = assignTiers(rankedBrawlers);
+function stripMapResponse(raw, brawlerNameById, isActive) {
+  if (!raw || typeof raw !== 'object' || !raw.id || !raw.name) {
+    logger.warn('Unexpected map response shape', { raw });
+    return null;
+  }
 
-  rankedBrawlers.sort((a, b) => {
-    const cpsA = toNum(a.cps) ?? -999;
-    const cpsB = toNum(b.cps) ?? -999;
-    if (cpsA !== cpsB) {
-      return cpsB - cpsA;
-    }
-    return sortByAdjustedThenRaw(a, b);
-  });
+  const teamCandidates = safeArray(raw.teamStats)
+    .concat(safeArray(raw.stats?.teams))
+    .concat(safeArray(raw.teams))
+    .concat(safeArray(raw.meta?.teams));
 
-  rankedBrawlers = rankedBrawlers.slice(0, 20);
+  const rankedBrawlers = getRankedBrawlers(raw, brawlerNameById);
+
+  // Deduplicate teams by sorted brawler names
+  const teamsByKey = new Map();
+  teamCandidates
+    .map((entry) => parseTeamEntry(entry, brawlerNameById))
+    .filter(Boolean)
+    .forEach((team) => {
+      const teamKey = [...team.brawlers].sort().join('|');
+      if (!teamsByKey.has(teamKey)) {
+        teamsByKey.set(teamKey, team);
+      }
+    });
+  let teams = Array.from(teamsByKey.values());
+
+  const teamPrior = computePriorFromEntries(teams);
+  teams = teams
+    .map((entry) => ({
+      ...entry,
+      adjustedWinRate: computeAdjustedWinRate(entry.winRate, entry.count, teamPrior),
+    }))
+    .sort(sortByAdjustedThenRaw)
+    .slice(0, 20);
+
+  if (teams.length === 0) {
+    teams = buildFallbackTeamsFromBrawlers(rankedBrawlers.slice(0, 20)).slice(0, 20);
+  }
 
   return {
+    id: raw.id,
+    name: raw.name,
     map: raw.name,
     mode: modeName(raw),
-    brawlers: rankedBrawlers,
+    activeToday: Boolean(isActive),
+    brawlers: rankedBrawlers.slice(0, 20),
     teams,
   };
 }
@@ -490,7 +481,7 @@ function buildBestMapsFromCatalog(brawlerId, fallbackName) {
 
 function stripBrawlerResponse(raw, requestedId) {
   if (!raw || typeof raw !== 'object' || !raw.id || !raw.name) {
-    console.warn('[BrawlAPI] Unexpected brawler response shape');
+    logger.warn('Unexpected brawler response shape', { raw, requestedId });
     return null;
   }
 
@@ -523,128 +514,43 @@ function stripBrawlerResponse(raw, requestedId) {
     : buildBestMapsFromCatalog(requestedId || raw.id, raw.name);
 
   return {
+    id: raw.id || requestedId,
     name: raw.name,
     bestMaps: hydratedBestMaps,
   };
 }
 
-async function fetchJson(path) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+async function loadActiveEvents() {
   try {
-    const response = await fetch(`${BRAWL_API_BASE}${path}`, { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`BrawlAPI request failed: ${response.status}`);
-    }
-    return await response.json();
-  } finally {
-    clearTimeout(timeout);
+    const activeMapIds = await brawlApi.fetchActiveMapIds();
+    catalog.activeMapIds = activeMapIds;
+    return true;
+  } catch (error) {
+    logger.warn('Events refresh failed', { error: error.message });
+    return false;
   }
-}
-
-async function fetchMaps() {
-  const payload = await fetchJson('/maps');
-  const allMaps = safeArray(payload?.list || payload?.items || payload).map((item) => ({
-    id: item.id,
-    name: item.name,
-    mode: modeName(item),
-    stats: safeArray(item.stats),
-    teamStats: safeArray(item.teamStats),
-    _norm: normalizeText(item.name),
-    _raw: item,
-  })).filter((item) => item.id && item.name);
-
-  // Deduplicate by ID (keep first occurrence)
-  const mapsById = new Map();
-  allMaps.forEach((map) => {
-    const mapId = Number(map.id);
-    if (!mapsById.has(mapId)) {
-      mapsById.set(mapId, map);
-    }
-  });
-  return Array.from(mapsById.values());
-}
-
-async function fetchActiveMapIds() {
-  const payload = await fetchJson('/events');
-  const events = safeArray(payload?.active);
-  if (!events.length) {
-    return new Set();
-  }
-
-  const nowMs = now();
-  const todayIds = new Set(
-    events
-      .filter((event) => {
-        const start = Date.parse(event?.startTime || '');
-        const end = Date.parse(event?.endTime || '');
-        if (!Number.isFinite(start) || !Number.isFinite(end)) {
-          return true;
-        }
-        return nowMs >= start && nowMs <= end;
-      })
-      .map((event) => Number(event?.map?.id))
-      .filter((id) => Number.isFinite(id))
-  );
-
-  if (todayIds.size > 0) {
-    return todayIds;
-  }
-
-  return new Set(
-    events
-      .map((event) => Number(event?.map?.id))
-      .filter((id) => Number.isFinite(id))
-  );
-}
-
-async function fetchBrawlers() {
-  const payload = await fetchJson('/brawlers');
-  const allBrawlers = safeArray(payload?.list || payload?.items || payload).map((item) => ({
-    id: item.id,
-    name: item.name,
-    _norm: normalizeText(item.name),
-    _raw: item,
-  })).filter((item) => item.id && item.name);
-
-  // Deduplicate by ID (keep first occurrence)
-  const brawlersById = new Map();
-  allBrawlers.forEach((brawler) => {
-    const brawlerId = Number(brawler.id);
-    if (!brawlersById.has(brawlerId)) {
-      brawlersById.set(brawlerId, brawler);
-    }
-  });
-  return Array.from(brawlersById.values());
-}
-
-async function fetchMap(id) {
-  return fetchJson(`/maps/${encodeURIComponent(id)}`);
-}
-
-async function fetchBrawler(id) {
-  return fetchJson(`/brawlers/${encodeURIComponent(id)}`);
 }
 
 async function loadCatalog() {
   try {
-    const [maps, brawlers, activeMapIds] = await Promise.all([
-      fetchMaps(),
-      fetchBrawlers(),
-      fetchActiveMapIds().catch(() => new Set()),
+    const [maps, brawlers] = await Promise.all([
+      brawlApi.fetchMaps(),
+      brawlApi.fetchBrawlers(),
     ]);
     if (!maps.length || !brawlers.length) {
-      console.warn('[Catalog] Empty catalog payload, keeping previous catalog');
+      logger.warn('Empty catalog payload, keeping previous catalog');
       return false;
     }
     catalog.maps = maps;
     catalog.brawlers = brawlers;
     catalog.brawlerById = new Map(brawlers.map((item) => [Number(item.id), item.name]));
-    catalog.activeMapIds = activeMapIds;
+    
+    await loadActiveEvents();
+    
     catalog.loadedAt = now();
     return true;
   } catch (error) {
-    console.warn('[Catalog] Refresh failed, keeping previous catalog:', error.message);
+    logger.warn('Catalog refresh failed', { error: error.message });
     return false;
   }
 }
@@ -669,19 +575,91 @@ function bestSuggestionsFromCatalog(type, query = '', limit = 5) {
   return topScored(pool, queryNorm, limit).map((item) => item.name);
 }
 
-app.get('/api/search', (req, res) => {
-  const q = String(req.query.q || '').trim();
-  return res.json(searchCatalog(q));
+app.get('/api/search', validateSearchQuery, validateLimit, (req, res) => {
+  const q = req.query.q;
+  const limit = req.query.limit;
+  
+  logger.debug('Search request', { query: q, limit });
+  
+  const searchResults = searchCatalog(q);
+  
+  // Combine results into a single array for compatibility with tests/frontend
+  const results = [
+    ...searchResults.maps.map(m => ({ ...m, type: 'map' })),
+    ...searchResults.brawlers.map(b => ({ ...b, type: 'brawler' }))
+  ].slice(0, limit);
+  
+  logger.info('Search completed', {
+    requestId: req.requestId,
+    query: q,
+    resultCount: results.length
+  });
+  
+  return res.json(results);
 });
-app.get('/api/map/:id', async (req, res) => {
+
+app.get('/api/live', async (req, res) => {
+  // Self-heal live data if startup refresh failed or cache drifted.
+  if (!catalog.maps.length || !catalog.brawlers.length) {
+    await loadCatalog();
+  }
+
+  if (!catalog.activeMapIds.size) {
+    await loadActiveEvents();
+  }
+
+  let liveMaps = catalog.maps
+    .filter((m) => catalog.activeMapIds.has(Number(m.id)))
+    .map((m) => {
+      const ranked = getRankedBrawlers(m._raw, catalog.brawlerById);
+      const top3 = ranked.slice(0, 3).map((b) => ({
+        name: b.name,
+        winRate: b.winRate,
+        tier: b.tier,
+      }));
+
+      return {
+        id: m.id,
+        name: m.name,
+        mode: m.mode,
+        brawlers: top3,
+      };
+    });
+
+  // If we have active ids but no matching maps, try one forced catalog refresh.
+  if (!liveMaps.length && catalog.activeMapIds.size) {
+    await loadCatalog();
+    liveMaps = catalog.maps
+      .filter((m) => catalog.activeMapIds.has(Number(m.id)))
+      .map((m) => {
+        const ranked = getRankedBrawlers(m._raw, catalog.brawlerById);
+        const top3 = ranked.slice(0, 3).map((b) => ({
+          name: b.name,
+          winRate: b.winRate,
+          tier: b.tier,
+        }));
+
+        return {
+          id: m.id,
+          name: m.name,
+          mode: m.mode,
+          brawlers: top3,
+        };
+      });
+  }
+
+  return res.json(liveMaps);
+});
+
+app.get('/api/map/:id', validateMapId, async (req, res) => {
   const { id } = req.params;
   const cacheKey = `map:${id}`;
   const startedAt = now();
 
-  // If caller explicitly wants the raw Brawlify payload, proxy it unchanged
+  // If caller explicitly wants the raw BrawlAPI payload, proxy it unchanged
   if (String(req.query.raw || '') === 'true') {
     try {
-      const raw = await fetchMap(id);
+      const raw = await brawlApi.fetchMap(id);
       return res.json(raw);
     } catch (error) {
       return res.status(502).json({ error: 'Unable to fetch raw map data', detail: error.message });
@@ -692,15 +670,16 @@ app.get('/api/map/:id', async (req, res) => {
   if (cached) {
     return res.json({
       ...cached,
-      source: 'brawlify',
+      source: 'brawlapi',
       cached: true,
       fetchMs: 0,
     });
   }
 
   try {
-    const raw = await fetchMap(id);
-    const stripped = stripMapResponse(raw, catalog.brawlerById);
+    const raw = await brawlApi.fetchMap(id);
+    const isActive = catalog.activeMapIds.has(Number(id));
+    const stripped = stripMapResponse(raw, catalog.brawlerById, isActive);
     if (!stripped) {
       return res.status(404).json({
         error: 'Map not found or unsupported response shape.',
@@ -712,7 +691,7 @@ app.get('/api/map/:id', async (req, res) => {
 
     return res.json({
       ...stripped,
-      source: 'brawlify',
+      source: 'brawlapi',
       cached: false,
       fetchMs: now() - startedAt,
     });
@@ -721,7 +700,7 @@ app.get('/api/map/:id', async (req, res) => {
     if (stale) {
       return res.json({
         ...stale,
-        source: 'brawlify',
+        source: 'brawlapi',
         cached: true,
         stale: true,
         fetchMs: 0,
@@ -736,15 +715,15 @@ app.get('/api/map/:id', async (req, res) => {
   }
 });
 
-app.get('/api/brawler/:id', async (req, res) => {
+app.get('/api/brawler/:id', validateBrawlerId, async (req, res) => {
   const { id } = req.params;
   const cacheKey = `brawler:${id}`;
   const startedAt = now();
 
-  // raw=true → proxy the exact Brawlify payload
+  // raw=true → proxy the exact BrawlAPI payload
   if (String(req.query.raw || '') === 'true') {
     try {
-      const raw = await fetchBrawler(id);
+      const raw = await brawlApi.fetchBrawler(id);
       return res.json(raw);
     } catch (error) {
       return res.status(502).json({ error: 'Unable to fetch raw brawler data', detail: error.message });
@@ -755,14 +734,14 @@ app.get('/api/brawler/:id', async (req, res) => {
   if (cached) {
     return res.json({
       ...cached,
-      source: 'brawlify',
+      source: 'brawlapi',
       cached: true,
       fetchMs: 0,
     });
   }
 
   try {
-    const raw = await fetchBrawler(id);
+    const raw = await brawlApi.fetchBrawler(id);
     const stripped = stripBrawlerResponse(raw, id);
     if (!stripped) {
       return res.status(404).json({
@@ -775,7 +754,7 @@ app.get('/api/brawler/:id', async (req, res) => {
 
     return res.json({
       ...stripped,
-      source: 'brawlify',
+      source: 'brawlapi',
       cached: false,
       fetchMs: now() - startedAt,
     });
@@ -784,7 +763,7 @@ app.get('/api/brawler/:id', async (req, res) => {
     if (stale) {
       return res.json({
         ...stale,
-        source: 'brawlify',
+        source: 'brawlapi',
         cached: true,
         stale: true,
         fetchMs: 0,
@@ -802,20 +781,59 @@ app.get('/api/brawler/:id', async (req, res) => {
 app.get('/health', (req, res) => {
   const stats = getCacheStats();
   const ageMs = catalog.loadedAt ? now() - catalog.loadedAt : 0;
+  const currentMetrics = metrics.getMetrics();
 
   res.json({
     status: 'ok',
-    cacheSize: stats.size,
-    cacheMax: stats.max,
-    catalogAge: formatAge(ageMs),
+    cache: {
+      size: stats.size,
+      max: stats.max,
+      hitRate: Math.round(currentMetrics.cache.hitRate * 100) / 100
+    },
+    catalog: {
+      age: formatAge(ageMs),
+      loadedAt: catalog.loadedAt
+    },
+    metrics: {
+      uptime: currentMetrics.uptime,
+      requests: currentMetrics.requests.total,
+      averageResponseTime: Math.round(currentMetrics.requests.averageResponseTime),
+      upstreamFailures: currentMetrics.api.upstreamFailures
+    }
   });
 });
 
-(async () => {
-  await loadCatalog();
-  setInterval(loadCatalog, CATALOG_TTL);
+app.get('/metrics', (req, res) => {
+  const currentMetrics = metrics.getMetrics();
+  
+  res.json(currentMetrics);
+});
 
-  app.listen(PORT, () => {
-    console.log(`BrawlFast listening on port ${PORT}`);
-  });
+// Store interval references for cleanup
+const intervals = [];
+
+// Initialize server
+(async () => {
+  // Load catalog first
+  await loadCatalog();
+  
+  // Start server only in non-test mode
+  if (process.env.NODE_ENV !== 'test') {
+    app.listen(PORT, () => {
+      logger.info('Server started', { port: PORT, environment: process.env.NODE_ENV || 'development' });
+    });
+    
+    // Setup periodic refresh intervals
+    intervals.push(setInterval(loadCatalog, CATALOG_TTL));
+    intervals.push(setInterval(loadActiveEvents, EVENTS_TTL));
+  }
 })();
+
+// Export for tests
+module.exports = app;
+
+if (process.env.NODE_ENV === 'test') {
+  app.cleanup = () => {
+    intervals.forEach(interval => clearInterval(interval));
+  };
+}

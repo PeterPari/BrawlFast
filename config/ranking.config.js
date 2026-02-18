@@ -32,7 +32,9 @@ const MapType = {
  */
 const bayesianPriors = {
   wins: 50,
-  losses: 50
+  losses: 50,
+  weight: 15000,
+  defaultWinRate: 50
 };
 
 /**
@@ -153,10 +155,12 @@ const useRateThresholds = {
   /**
    * Sleeper Pick: Low use + high win
    * Win rate z-score above threshold, use rate below negative threshold
+   * Must have at least minUseRate to be considered a sleeper pick
    */
   sleeperPick: {
     winRateMin: 0.5,
-    useRateMax: -0.5
+    useRateMax: -0.5,
+    minUseRate: 0.05
   },
 
   /**
