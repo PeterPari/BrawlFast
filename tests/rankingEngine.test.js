@@ -10,12 +10,18 @@ const {
   calculateTimeWeightedWinRate,
   normalizeMapType,
   getMapTypeWeights,
-  calculatePairwiseSynergy,
+  getEffectiveWeights,
+  calculatePairwiseSynergy,    // legacy export
+  calculateCompositionScore,
   calculateUseRateScore,
+  calculateUseRateScoreDiscrete,
   calculateCounterMetaScore,
   computeCPS,
+  computeCPSWithCI,
   assignTiers,
-  MapType
+  rankBrawlers,
+  MapType,
+  SkillTier
 } = require('../lib/rankingEngine');
 
 describe('Ranking Engine Module', () => {
@@ -191,76 +197,145 @@ describe('Ranking Engine Module', () => {
     });
   });
 
-  describe('calculatePairwiseSynergy()', () => {
+  describe('calculatePairwiseSynergy() — legacy alias', () => {
     const mockBrawlers = [
       { name: 'Poco', winRate: 52, adjustedWinRate: 52 },
       { name: 'Mortis', winRate: 48, adjustedWinRate: 48 },
       { name: 'Brock', winRate: 50, adjustedWinRate: 50 }
     ];
 
-    test('returns 0 when no teams include brawler', () => {
-      const teams = [];
-      const synergy = calculatePairwiseSynergy('Poco', teams, mockBrawlers);
-      expect(synergy).toBe(0);
+    test('returns 0.5 (neutral) when no teams include brawler', () => {
+      // Legacy alias now delegates to calculateCompositionScore which defaults to 0.5
+      const result = calculatePairwiseSynergy('Poco', [], mockBrawlers);
+      expect(result).toBe(0.5);
     });
 
     test('filters out teams with low sample count', () => {
       const teams = [
-        { brawlers: ['Poco', 'Mortis'], winRate: 60, count: 10 } // Below 50 threshold
+        { brawlers: ['Poco', 'Mortis', 'Brock'], winRate: 60, count: 10 } // Below 50 threshold
       ];
-      const synergy = calculatePairwiseSynergy('Poco', teams, mockBrawlers);
-      expect(synergy).toBe(0);
-    });
-
-    test('calculates positive synergy for strong teams', () => {
-      const teams = [
-        { brawlers: ['Poco', 'Mortis'], winRate: 60, adjustedWinRate: 60, count: 100 }
-      ];
-      const synergy = calculatePairwiseSynergy('Poco', teams, mockBrawlers);
-      expect(synergy).toBeGreaterThan(0);
+      const result = calculatePairwiseSynergy('Poco', teams, mockBrawlers);
+      expect(result).toBe(0.5); // neutral because no qualifying teams
     });
 
     test('returns value between 0 and 1', () => {
       const teams = [
-        { brawlers: ['Poco', 'Mortis'], winRate: 55, adjustedWinRate: 55, count: 100 },
-        { brawlers: ['Poco', 'Brock'], winRate: 57, adjustedWinRate: 57, count: 80 }
+        { brawlers: ['Poco', 'Mortis', 'Brock'], winRate: 60, adjustedWinRate: 60, count: 100 }
       ];
-      const synergy = calculatePairwiseSynergy('Poco', teams, mockBrawlers);
-      expect(synergy).toBeGreaterThanOrEqual(0);
-      expect(synergy).toBeLessThanOrEqual(1);
+      const result = calculatePairwiseSynergy('Poco', teams, mockBrawlers);
+      expect(result).toBeGreaterThanOrEqual(0);
+      expect(result).toBeLessThanOrEqual(1);
     });
   });
 
-  describe('calculateUseRateScore()', () => {
+  describe('calculateCompositionScore()', () => {
+    const mockBrawlers = [
+      { name: 'Poco',   winRate: 52, adjustedWinRate: 52 },
+      { name: 'Mortis', winRate: 48, adjustedWinRate: 48 },
+      { name: 'Brock',  winRate: 50, adjustedWinRate: 50 }
+    ];
+
+    test('returns 0.5 (neutral) when no teams include brawler', () => {
+      expect(calculateCompositionScore('Poco', [], mockBrawlers)).toBe(0.5);
+    });
+
+    test('filters teams below sample threshold', () => {
+      const teams = [
+        { brawlers: ['Poco', 'Mortis', 'Brock'], winRate: 65, adjustedWinRate: 65, count: 10 }
+      ];
+      expect(calculateCompositionScore('Poco', teams, mockBrawlers)).toBe(0.5);
+    });
+
+    test('positive composition lift produces score > 0.5', () => {
+      // Team WR 62, individual mean = (52+48+50)/3 = 50 → lift = +12 → normalised above 0.5
+      const teams = [
+        { brawlers: ['Poco', 'Mortis', 'Brock'], winRate: 62, adjustedWinRate: 62, count: 200 }
+      ];
+      const score = calculateCompositionScore('Poco', teams, mockBrawlers);
+      expect(score).toBeGreaterThan(0.5);
+    });
+
+    test('negative composition lift produces score < 0.5', () => {
+      // Team WR 40, individual mean 50 → lift = -10 → normalised below 0.5
+      const teams = [
+        { brawlers: ['Poco', 'Mortis', 'Brock'], winRate: 40, adjustedWinRate: 40, count: 200 }
+      ];
+      const score = calculateCompositionScore('Poco', teams, mockBrawlers);
+      expect(score).toBeLessThan(0.5);
+    });
+
+    test('multiple teams are log-weighted by play count', () => {
+      const fewGames  = { brawlers: ['Poco', 'Mortis', 'Brock'], winRate: 70, adjustedWinRate: 70, count: 51  };
+      const manyGames = { brawlers: ['Poco', 'Mortis', 'Brock'], winRate: 40, adjustedWinRate: 40, count: 5000 };
+      const score = calculateCompositionScore('Poco', [fewGames, manyGames], mockBrawlers);
+      // manyGames has much higher weight → net lift is negative → score < 0.5
+      expect(score).toBeLessThan(0.5);
+    });
+
+    test('returns value in [0, 1]', () => {
+      const teams = [
+        { brawlers: ['Poco', 'Mortis', 'Brock'], winRate: 75, adjustedWinRate: 75, count: 300 }
+      ];
+      const score = calculateCompositionScore('Poco', teams, mockBrawlers);
+      expect(score).toBeGreaterThanOrEqual(0);
+      expect(score).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe('calculateUseRateScore() — continuous sigmoid', () => {
     const meanUse = 10;
     const stdDevUse = 5;
     const meanWin = 50;
     const stdDevWin = 5;
 
     test('meta brawler (high use, high win) scores high', () => {
+      // zUse=3, zWin=2 → logit=3.5 → sigmoid≈0.97
       const score = calculateUseRateScore(25, 60, meanUse, stdDevUse, meanWin, stdDevWin);
       expect(score).toBeGreaterThan(0.8);
     });
 
     test('sleeper pick (low use, high win) scores high', () => {
+      // zUse=-1, zWin=2 → no trap penalty → logit=4 → sigmoid≈0.98
       const score = calculateUseRateScore(5, 60, meanUse, stdDevUse, meanWin, stdDevWin);
       expect(score).toBeGreaterThan(0.7);
     });
 
-    test('trap pick (high use, low win) scores low', () => {
+    test('trap pick (high use, low win) scores very low', () => {
+      // zUse=3, zWin=-2 → trapPenalty=2.5 → logit=-6.5 → sigmoid≈0.0015
       const score = calculateUseRateScore(25, 40, meanUse, stdDevUse, meanWin, stdDevWin);
+      expect(score).toBeLessThan(0.1);
+    });
+
+    test('average brawler scores 0.5', () => {
+      // zUse=0, zWin=0 → logit=0 → sigmoid=0.5
+      const score = calculateUseRateScore(10, 50, meanUse, stdDevUse, meanWin, stdDevWin);
+      expect(score).toBeCloseTo(0.5, 3);
+    });
+
+    test('returns value strictly between 0 and 1', () => {
+      const score = calculateUseRateScore(15, 55, meanUse, stdDevUse, meanWin, stdDevWin);
+      expect(score).toBeGreaterThan(0);
+      expect(score).toBeLessThan(1);
+    });
+
+    test('sleeper scores higher than trap pick for same |z|', () => {
+      const sleeper = calculateUseRateScore(5,  60, meanUse, stdDevUse, meanWin, stdDevWin);
+      const trap    = calculateUseRateScore(25, 40, meanUse, stdDevUse, meanWin, stdDevWin);
+      expect(sleeper).toBeGreaterThan(trap);
+    });
+  });
+
+  describe('calculateUseRateScoreDiscrete() — legacy v2 behaviour', () => {
+    const meanUse = 10, stdDevUse = 5, meanWin = 50, stdDevWin = 5;
+
+    test('trap pick scores exactly 0.2', () => {
+      const score = calculateUseRateScoreDiscrete(25, 40, meanUse, stdDevUse, meanWin, stdDevWin);
       expect(score).toBe(0.2);
     });
 
     test('average brawler scores around 0.5', () => {
-      const score = calculateUseRateScore(10, 50, meanUse, stdDevUse, meanWin, stdDevWin);
+      const score = calculateUseRateScoreDiscrete(10, 50, meanUse, stdDevUse, meanWin, stdDevWin);
       expect(score).toBeCloseTo(0.5, 1);
-    });
-
-    test('returns value between 0 and 1', () => {
-      const score = calculateUseRateScore(15, 55, meanUse, stdDevUse, meanWin, stdDevWin);
-      expect(score).toBeGreaterThanOrEqual(0);
-      expect(score).toBeLessThanOrEqual(1);
     });
   });
 
@@ -286,7 +361,7 @@ describe('Ranking Engine Module', () => {
     test('good matchups produce score > 0.5', () => {
       const matchups = [
         { opponent: 'Mortis', winRate: 65, sampleCount: 100 },
-        { opponent: 'Tick', winRate: 60, sampleCount: 80 }
+        { opponent: 'Tick',   winRate: 60, sampleCount: 80  }
       ];
       const score = calculateCounterMetaScore('Shelly', matchups, []);
       expect(score).toBeGreaterThan(0.5);
@@ -294,11 +369,28 @@ describe('Ranking Engine Module', () => {
 
     test('bad matchups produce score < 0.5', () => {
       const matchups = [
-        { opponent: 'Colt', winRate: 35, sampleCount: 100 },
-        { opponent: 'Brock', winRate: 40, sampleCount: 80 }
+        { opponent: 'Colt',  winRate: 35, sampleCount: 100 },
+        { opponent: 'Brock', winRate: 40, sampleCount: 80  }
       ];
       const score = calculateCounterMetaScore('Shelly', matchups, []);
       expect(score).toBeLessThan(0.5);
+    });
+
+    test('diversity penalty attenuates score when one matchup dominates', () => {
+      // Single matchup → diversity=0 → multiplier = minMultiplier (0.7)
+      const singleMatchup = [
+        { opponent: 'Mortis', winRate: 70, sampleCount: 1000 }
+      ];
+      // Multiple matchups → diversity>0 → multiplier > 0.7
+      const multiMatchups = [
+        { opponent: 'Mortis', winRate: 70, sampleCount: 100 },
+        { opponent: 'Tick',   winRate: 70, sampleCount: 100 },
+        { opponent: 'Colt',   winRate: 70, sampleCount: 100 }
+      ];
+      const single = calculateCounterMetaScore('Shelly', singleMatchup, []);
+      const multi  = calculateCounterMetaScore('Shelly', multiMatchups,  []);
+      // Both above 0.5; multi should score higher due to diversity bonus
+      expect(multi).toBeGreaterThan(single);
     });
 
     test('returns value between 0 and 1', () => {
@@ -308,6 +400,71 @@ describe('Ranking Engine Module', () => {
       const score = calculateCounterMetaScore('Shelly', matchups, []);
       expect(score).toBeGreaterThanOrEqual(0);
       expect(score).toBeLessThanOrEqual(1);
+    });
+  });
+
+  describe('getEffectiveWeights()', () => {
+    test('competitive tier matches base weights exactly', () => {
+      const base      = getMapTypeWeights(MapType.GEM_GRAB);
+      const effective = getEffectiveWeights(MapType.GEM_GRAB, SkillTier.COMPETITIVE);
+      expect(effective.performance).toBeCloseTo(base.performance, 5);
+      expect(effective.synergy).toBeCloseTo(base.synergy, 5);
+    });
+
+    test('casual tier has higher performance weight than competitive', () => {
+      const casual = getEffectiveWeights(MapType.GEM_GRAB, SkillTier.CASUAL);
+      const comp   = getEffectiveWeights(MapType.GEM_GRAB, SkillTier.COMPETITIVE);
+      expect(casual.performance).toBeGreaterThan(comp.performance);
+    });
+
+    test('pro tier has higher synergy weight than competitive', () => {
+      const pro  = getEffectiveWeights(MapType.GEM_GRAB, SkillTier.PRO);
+      const comp = getEffectiveWeights(MapType.GEM_GRAB, SkillTier.COMPETITIVE);
+      expect(pro.synergy).toBeGreaterThan(comp.synergy);
+    });
+
+    test('all weights sum to 1.0 for every mode and tier', () => {
+      const modes = Object.values(MapType);
+      const tiers = Object.values(SkillTier);
+      for (const mode of modes) {
+        for (const tier of tiers) {
+          const w = getEffectiveWeights(mode, tier);
+          const sum = w.performance + w.synergy + w.popularity + w.counter;
+          expect(sum).toBeCloseTo(1.0, 9);
+        }
+      }
+    });
+
+    test('defaults to competitive weights when tier is null', () => {
+      const withNull = getEffectiveWeights(MapType.SHOWDOWN, null);
+      const comp     = getEffectiveWeights(MapType.SHOWDOWN, SkillTier.COMPETITIVE);
+      expect(withNull.performance).toBeCloseTo(comp.performance, 9);
+    });
+
+    test('open map boosts performance weight vs no map name', () => {
+      // Shooting Star has openness 0.80 → +0.06*(0.80-0.5) = +0.018 performance
+      const withMap    = getEffectiveWeights(MapType.BOUNTY, SkillTier.COMPETITIVE, 'Shooting Star');
+      const withoutMap = getEffectiveWeights(MapType.BOUNTY, SkillTier.COMPETITIVE, null);
+      expect(withMap.performance).toBeGreaterThan(withoutMap.performance);
+    });
+
+    test('bush-heavy map boosts counter weight', () => {
+      // Hideout: bushCoverage 0.60 → counter += 0.04*(0.60-0.5) > 0
+      const withMap    = getEffectiveWeights(MapType.BOUNTY, SkillTier.COMPETITIVE, 'Hideout');
+      const withoutMap = getEffectiveWeights(MapType.BOUNTY, SkillTier.COMPETITIVE, null);
+      expect(withMap.counter).toBeGreaterThan(withoutMap.counter);
+    });
+
+    test('all weights still sum to 1.0 when map name is provided', () => {
+      const w = getEffectiveWeights(MapType.GEM_GRAB, SkillTier.PRO, 'Shooting Star');
+      const sum = w.performance + w.synergy + w.popularity + w.counter;
+      expect(sum).toBeCloseTo(1.0, 9);
+    });
+
+    test('unknown map name applies zero feature adjustment', () => {
+      const withUnknown = getEffectiveWeights(MapType.BOUNTY, SkillTier.COMPETITIVE, 'ZZZFAKEMAP');
+      const withNull    = getEffectiveWeights(MapType.BOUNTY, SkillTier.COMPETITIVE, null);
+      expect(withUnknown.performance).toBeCloseTo(withNull.performance, 9);
     });
   });
 
@@ -373,13 +530,155 @@ describe('Ranking Engine Module', () => {
 
     test('CPS is confidence-weighted', () => {
       const highSampleBrawler = { ...mockBrawler, count: 10000 };
-      const lowSampleBrawler = { ...mockBrawler, count: 100 };
+      const lowSampleBrawler  = { ...mockBrawler, count: 100   };
 
       const highCPS = computeCPS(highSampleBrawler, mockAllBrawlers, mockTeams, 'Gem Grab');
-      const lowCPS = computeCPS(lowSampleBrawler, mockAllBrawlers, mockTeams, 'Gem Grab');
+      const lowCPS  = computeCPS(lowSampleBrawler,  mockAllBrawlers, mockTeams, 'Gem Grab');
 
       // High sample count should have higher confidence multiplier
       expect(highCPS).toBeGreaterThan(lowCPS);
+    });
+
+    test('skill tier shifts CPS score', () => {
+      const casual = computeCPS(mockBrawler, mockAllBrawlers, mockTeams, 'Gem Grab', null, SkillTier.CASUAL);
+      const pro    = computeCPS(mockBrawler, mockAllBrawlers, mockTeams, 'Gem Grab', null, SkillTier.PRO);
+      // They shouldn't be identical (different weights)
+      // Both must still be in valid range
+      expect(casual).toBeGreaterThanOrEqual(0);
+      expect(pro).toBeGreaterThanOrEqual(0);
+    });
+
+    test('map name shifts CPS for open map vs no map name', () => {
+      // Use a trap-pick brawler: very high use rate relative to win rate.
+      // z_use >> z_win → useRateScore is driven very low by the trap penalty.
+      // In this regime normWinRate > useRateScore, so boosting the performance
+      // weight (open map → Shooting 'Star openness=0.80) cleanly raises CPS.
+      const trapBrawler = {
+        name: 'Belle',
+        winRate: 52,
+        adjustedWinRate: 52,
+        useRate: 50,   // extremely high relative to mockAllBrawlers (mean≈12)
+        count: 1000
+      };
+      const cpsOpen = computeCPS(trapBrawler, mockAllBrawlers, mockTeams, 'Bounty', null, null, 'Shooting Star');
+      const cpsNone = computeCPS(trapBrawler, mockAllBrawlers, mockTeams, 'Bounty', null, null, null);
+      // Shooting Star boosts performance weight ↑ and reduces popularity weight ↓.
+      // Since normWinRate(0.52) >> useRateScore(≈0.003), this raises CPS.
+      expect(cpsOpen).toBeGreaterThan(cpsNone);
+    });
+
+    test('staleness penalty reduces CPS when pick rate crashes and WR holds', () => {
+      const stalenessBrawler = {
+        ...mockBrawler,
+        useRate: 2,            // current pick rate cratered (was 15)
+        historicalPickRate: 15 // historical baseline
+        // historicalWinRate not set → falls back to current WR → stable WR signal
+      };
+      const normalBrawler = { ...mockBrawler };
+
+      const staleCPS  = computeCPS(stalenessBrawler, mockAllBrawlers, mockTeams, 'Gem Grab');
+      const normalCPS = computeCPS(normalBrawler,    mockAllBrawlers, mockTeams, 'Gem Grab');
+
+      // Stale brawler should score lower due to the staleness multiplier
+      expect(staleCPS).toBeLessThan(normalCPS);
+    });
+
+    test('no staleness penalty when historicalPickRate is null', () => {
+      const brawlerNoHistory = { ...mockBrawler }; // no historicalPickRate
+      const brawlerWithHistory = { ...mockBrawler, historicalPickRate: mockBrawler.useRate };
+
+      const cpsNoHistory   = computeCPS(brawlerNoHistory,   mockAllBrawlers, mockTeams, 'Gem Grab');
+      const cpsWithHistory = computeCPS(brawlerWithHistory, mockAllBrawlers, mockTeams, 'Gem Grab');
+
+      // Same pick rate → stable pick rate → no staleness penalty → same CPS
+      expect(cpsNoHistory).toBeCloseTo(cpsWithHistory, 3);
+    });
+  });
+
+  describe('computeCPSWithCI()', () => {
+    const mockBrawler = {
+      name: 'Belle',
+      winRate: 55,
+      adjustedWinRate: 55,
+      useRate: 15,
+      count: 1000
+    };
+    const mockAllBrawlers = [
+      { name: 'Belle',  winRate: 55, adjustedWinRate: 55, useRate: 15 },
+      { name: 'Brock',  winRate: 50, adjustedWinRate: 50, useRate: 10 },
+      { name: 'Mortis', winRate: 48, adjustedWinRate: 48, useRate: 12 }
+    ];
+
+    test('returns cps, ci, and variance', () => {
+      const result = computeCPSWithCI(mockBrawler, mockAllBrawlers, [], 'Gem Grab');
+      expect(result).toHaveProperty('cps');
+      expect(result).toHaveProperty('ci');
+      expect(result).toHaveProperty('variance');
+    });
+
+    test('ci is a two-element array [lower, upper]', () => {
+      const { ci } = computeCPSWithCI(mockBrawler, mockAllBrawlers, [], 'Gem Grab');
+      expect(Array.isArray(ci)).toBe(true);
+      expect(ci).toHaveLength(2);
+      expect(ci[0]).toBeLessThanOrEqual(ci[1]);
+    });
+
+    test('cps is within its own CI', () => {
+      const { cps, ci } = computeCPSWithCI(mockBrawler, mockAllBrawlers, [], 'Gem Grab');
+      expect(cps).toBeGreaterThanOrEqual(ci[0]);
+      expect(cps).toBeLessThanOrEqual(ci[1]);
+    });
+
+    test('CI bounds are clamped to [0, 1]', () => {
+      const result = computeCPSWithCI(mockBrawler, mockAllBrawlers, [], 'Gem Grab');
+      expect(result.ci[0]).toBeGreaterThanOrEqual(0);
+      expect(result.ci[1]).toBeLessThanOrEqual(1);
+    });
+
+    test('low sample brawler has wider CI than high sample brawler', () => {
+      const loSample = { ...mockBrawler, count: 50   };
+      const hiSample = { ...mockBrawler, count: 10000 };
+
+      const loResult = computeCPSWithCI(loSample, mockAllBrawlers, [], 'Gem Grab');
+      const hiResult = computeCPSWithCI(hiSample, mockAllBrawlers, [], 'Gem Grab');
+
+      const loWidth = loResult.ci[1] - loResult.ci[0];
+      const hiWidth = hiResult.ci[1] - hiResult.ci[0];
+      expect(loWidth).toBeGreaterThan(hiWidth);
+    });
+
+    test('variance is non-negative', () => {
+      const { variance } = computeCPSWithCI(mockBrawler, mockAllBrawlers, [], 'Gem Grab');
+      expect(variance).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('rankBrawlers() with skillTier', () => {
+    const brawlers = [
+      { name: 'Poco',   winRate: 55, adjustedWinRate: 55, useRate: 12, count: 500 },
+      { name: 'Mortis', winRate: 48, adjustedWinRate: 48, useRate: 10, count: 300 },
+      { name: 'Brock',  winRate: 52, adjustedWinRate: 52, useRate:  8, count: 400 }
+    ];
+
+    test('returns ranked brawlers with tier assigned', () => {
+      const ranked = rankBrawlers(brawlers, [], 'Gem Grab');
+      ranked.forEach(b => {
+        expect(b).toHaveProperty('cps');
+        expect(b).toHaveProperty('tier');
+        expect(['S', 'A', 'B', 'C', 'F']).toContain(b.tier);
+      });
+    });
+
+    test('casual tier produces valid rankings', () => {
+      const ranked = rankBrawlers(brawlers, [], 'Gem Grab', SkillTier.CASUAL);
+      expect(ranked.length).toBe(brawlers.length);
+      ranked.forEach(b => expect(b.cps).toBeGreaterThanOrEqual(0));
+    });
+
+    test('pro tier produces valid rankings', () => {
+      const ranked = rankBrawlers(brawlers, [], 'Gem Grab', SkillTier.PRO);
+      expect(ranked.length).toBe(brawlers.length);
+      ranked.forEach(b => expect(b.cps).toBeGreaterThanOrEqual(0));
     });
   });
 

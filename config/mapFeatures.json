@@ -1,0 +1,61 @@
+{
+  "_comment": "Terrain features for active Brawl Stars maps. All values in [0, 1] except laneCount (int 1-4). Edit freely — the ranking engine applies only small ±3pp adjustments so imprecision here is low-stakes.",
+
+  "_schema": {
+    "wallDensity":   "Fraction of playfield occupied by walls/obstacles. High = tight corridors.",
+    "openness":      "Width of sightlines / room to manoeuvre. Often inverse of wallDensity but not always (water gaps score low on both).",
+    "bushCoverage":  "Fraction of playfield covered by bush. High = ambush value / stealth picks.",
+    "laneCount":     "Distinct lanes or corridors from spawn to objective. More lanes = more coordination required."
+  },
+
+  "_notes": "Maps are identified by name exactly as returned by the Brawlify API. The loader also does a normalised (lowercase, no-spaces) fallback so minor capitalisation differences are handled automatically.",
+
+  "Hard Rock Mine":       { "wallDensity": 0.70, "openness": 0.25, "bushCoverage": 0.05, "laneCount": 2 },
+  "Undermine":            { "wallDensity": 0.65, "openness": 0.30, "bushCoverage": 0.05, "laneCount": 2 },
+  "Minecart Madness":     { "wallDensity": 0.50, "openness": 0.50, "bushCoverage": 0.15, "laneCount": 3 },
+  "Double Swoosh":        { "wallDensity": 0.55, "openness": 0.40, "bushCoverage": 0.10, "laneCount": 2 },
+  "Crystal Arcade":       { "wallDensity": 0.45, "openness": 0.55, "bushCoverage": 0.20, "laneCount": 3 },
+  "Gem Fort":             { "wallDensity": 0.40, "openness": 0.55, "bushCoverage": 0.30, "laneCount": 3 },
+  "Deathcap Trap":        { "wallDensity": 0.45, "openness": 0.40, "bushCoverage": 0.55, "laneCount": 2 },
+  "Flourishing Desert":   { "wallDensity": 0.40, "openness": 0.55, "bushCoverage": 0.20, "laneCount": 3 },
+  "Midnight Diner":       { "wallDensity": 0.65, "openness": 0.30, "bushCoverage": 0.10, "laneCount": 2 },
+
+  "Super Stadium":        { "wallDensity": 0.20, "openness": 0.80, "bushCoverage": 0.05, "laneCount": 1 },
+  "Pinball Dreams":       { "wallDensity": 0.60, "openness": 0.35, "bushCoverage": 0.05, "laneCount": 2 },
+  "Sneaky Fields":        { "wallDensity": 0.30, "openness": 0.60, "bushCoverage": 0.45, "laneCount": 2 },
+  "Galaxy Arena":         { "wallDensity": 0.25, "openness": 0.70, "bushCoverage": 0.10, "laneCount": 2 },
+  "GG Corral":            { "wallDensity": 0.50, "openness": 0.50, "bushCoverage": 0.20, "laneCount": 2 },
+  "Backyard Bowl":        { "wallDensity": 0.35, "openness": 0.55, "bushCoverage": 0.35, "laneCount": 2 },
+
+  "Shooting Star":        { "wallDensity": 0.20, "openness": 0.80, "bushCoverage": 0.05, "laneCount": 1 },
+  "Excel":                { "wallDensity": 0.45, "openness": 0.55, "bushCoverage": 0.15, "laneCount": 2 },
+  "Canal Grande":         { "wallDensity": 0.35, "openness": 0.60, "bushCoverage": 0.10, "laneCount": 3 },
+  "Hideout":              { "wallDensity": 0.40, "openness": 0.40, "bushCoverage": 0.60, "laneCount": 3 },
+  "Layer Cake":           { "wallDensity": 0.50, "openness": 0.45, "bushCoverage": 0.20, "laneCount": 3 },
+
+  "Goldarm Gulch":        { "wallDensity": 0.20, "openness": 0.80, "bushCoverage": 0.05, "laneCount": 1 },
+  "Flaring Phoenix":      { "wallDensity": 0.50, "openness": 0.45, "bushCoverage": 0.20, "laneCount": 3 },
+  "Middle Ground":        { "wallDensity": 0.40, "openness": 0.55, "bushCoverage": 0.20, "laneCount": 2 },
+  "Bell Tower Rush":      { "wallDensity": 0.70, "openness": 0.25, "bushCoverage": 0.05, "laneCount": 2 },
+  "Flowing Springs":      { "wallDensity": 0.45, "openness": 0.50, "bushCoverage": 0.25, "laneCount": 3 },
+  "Out in the Open":      { "wallDensity": 0.15, "openness": 0.85, "bushCoverage": 0.05, "laneCount": 1 },
+
+  "Open Business":        { "wallDensity": 0.20, "openness": 0.75, "bushCoverage": 0.05, "laneCount": 2 },
+  "Ring of Fire":         { "wallDensity": 0.30, "openness": 0.65, "bushCoverage": 0.10, "laneCount": 2 },
+  "Parallel Plays":       { "wallDensity": 0.45, "openness": 0.50, "bushCoverage": 0.15, "laneCount": 3 },
+  "Alpha Channel":        { "wallDensity": 0.40, "openness": 0.55, "bushCoverage": 0.20, "laneCount": 2 },
+  "Dueling Beetles":      { "wallDensity": 0.50, "openness": 0.45, "bushCoverage": 0.30, "laneCount": 3 },
+
+  "Safe Zone":            { "wallDensity": 0.60, "openness": 0.35, "bushCoverage": 0.10, "laneCount": 2 },
+  "Kaboom Canyon":        { "wallDensity": 0.70, "openness": 0.25, "bushCoverage": 0.05, "laneCount": 2 },
+  "Hot Potato":           { "wallDensity": 0.45, "openness": 0.50, "bushCoverage": 0.10, "laneCount": 2 },
+  "Bridge Too Far":       { "wallDensity": 0.55, "openness": 0.35, "bushCoverage": 0.05, "laneCount": 1 },
+
+  "Rockwall Brawl":       { "wallDensity": 0.65, "openness": 0.30, "bushCoverage": 0.10, "laneCount": 4 },
+  "Cavern Churn":         { "wallDensity": 0.60, "openness": 0.35, "bushCoverage": 0.15, "laneCount": 3 },
+  "Feast or Famine":      { "wallDensity": 0.35, "openness": 0.55, "bushCoverage": 0.25, "laneCount": 4 },
+  "Dark Passage":         { "wallDensity": 0.50, "openness": 0.35, "bushCoverage": 0.65, "laneCount": 3 },
+  "Island Invasion":      { "wallDensity": 0.30, "openness": 0.55, "bushCoverage": 0.15, "laneCount": 4 },
+  "Stormy Plains":        { "wallDensity": 0.25, "openness": 0.70, "bushCoverage": 0.10, "laneCount": 3 },
+  "Skull Creek":          { "wallDensity": 0.55, "openness": 0.40, "bushCoverage": 0.30, "laneCount": 3 }
+}

@@ -3,7 +3,8 @@ const {
   computeCPS,
   rankBrawlers,
   assignTiers,
-  MapType
+  MapType,
+  SkillTier
 } = require('./lib/rankingEngine');
 const { logger } = require('./lib/logger');
 const { createApiLimiter, createSearchLimiter } = require('./lib/rateLimiter');
@@ -29,6 +30,7 @@ const {
 } = require('./lib/search');
 const brawlApi = require('./lib/brawlApi');
 const config = require('./config/ranking.config');
+const { saveSnapshot, getHistoricalPickRateMap } = require('./lib/pickRateSnapshots');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -309,7 +311,7 @@ function buildFallbackTeamsFromBrawlers(brawlers) {
   return teams;
 }
 
-function getRankedBrawlers(raw, brawlerNameById) {
+function getRankedBrawlers(raw, brawlerNameById, skillTier = null, mapId = null, battleLogByBrawler = null) {
   const brawlerCandidates = safeArray(raw.stats)
     .concat(safeArray(raw.stats?.brawlers))
     .concat(safeArray(raw.brawlers))
@@ -344,6 +346,28 @@ function getRankedBrawlers(raw, brawlerNameById) {
     }))
     .sort(sortByAdjustedThenRaw);
 
+  // Attach historical pick-rate data for staleness detection.
+  // getHistoricalPickRateMap reads the snapshot file and returns {} when
+  // no baseline exists yet (first few refreshes after a cold start).
+  if (mapId != null) {
+    const historicalRates = getHistoricalPickRateMap(mapId);
+    if (Object.keys(historicalRates).length > 0) {
+      rankedBrawlers = rankedBrawlers.map((b) => ({
+        ...b,
+        historicalPickRate: historicalRates[b.name] ?? null
+      }));
+    }
+  }
+
+  // Attach per-brawler battle log games for changepoint detection.
+  // Only populated when the caller supplies a playerTag query param.
+  if (battleLogByBrawler) {
+    rankedBrawlers = rankedBrawlers.map((b) => ({
+      ...b,
+      recentGames: battleLogByBrawler.get(b.name) || b.recentGames || null
+    }));
+  }
+
   // Deduplicate teams by sorted brawler names (keep first occurrence)
   const teamsByKey = new Map();
   teamCandidates
@@ -371,10 +395,11 @@ function getRankedBrawlers(raw, brawlerNameById) {
   }
 
   const mapType = modeName(raw);
-  return rankBrawlers(rankedBrawlers, teams, mapType);
+  const mapName = raw.name || null;
+  return rankBrawlers(rankedBrawlers, teams, mapType, skillTier, mapName);
 }
 
-function stripMapResponse(raw, brawlerNameById, isActive) {
+function stripMapResponse(raw, brawlerNameById, isActive, skillTier = null, battleLogByBrawler = null) {
   if (!raw || typeof raw !== 'object' || !raw.id || !raw.name) {
     logger.warn('Unexpected map response shape', { raw });
     return null;
@@ -385,7 +410,15 @@ function stripMapResponse(raw, brawlerNameById, isActive) {
     .concat(safeArray(raw.teams))
     .concat(safeArray(raw.meta?.teams));
 
-  const rankedBrawlers = getRankedBrawlers(raw, brawlerNameById);
+  const rankedBrawlers = getRankedBrawlers(raw, brawlerNameById, skillTier, raw.id, battleLogByBrawler);
+
+  // Persist pick-rate snapshot for staleness detection on the next refresh.
+  // This is a best-effort write; failures should not block the response.
+  try {
+    saveSnapshot(raw.id, rankedBrawlers);
+  } catch (snapshotErr) {
+    logger.warn('Failed to save pick-rate snapshot', { mapId: raw.id, error: snapshotErr.message });
+  }
 
   // Deduplicate teams by sorted brawler names
   const teamsByKey = new Map();
@@ -611,7 +644,7 @@ app.get('/api/live', async (req, res) => {
   let liveMaps = catalog.maps
     .filter((m) => catalog.activeMapIds.has(Number(m.id)))
     .map((m) => {
-      const ranked = getRankedBrawlers(m._raw, catalog.brawlerById);
+      const ranked = getRankedBrawlers(m._raw, catalog.brawlerById, null, m.id, null);
       const top3 = ranked.slice(0, 3).map((b) => ({
         name: b.name,
         winRate: b.winRate,
@@ -632,7 +665,7 @@ app.get('/api/live', async (req, res) => {
     liveMaps = catalog.maps
       .filter((m) => catalog.activeMapIds.has(Number(m.id)))
       .map((m) => {
-        const ranked = getRankedBrawlers(m._raw, catalog.brawlerById);
+        const ranked = getRankedBrawlers(m._raw, catalog.brawlerById, null, m.id, null);
         const top3 = ranked.slice(0, 3).map((b) => ({
           name: b.name,
           winRate: b.winRate,
@@ -666,10 +699,41 @@ app.get('/api/map/:id', validateMapId, async (req, res) => {
     }
   }
 
+  // Validate and extract skill tier from query params
+  const rawTier = req.query.skillTier ? String(req.query.skillTier).toLowerCase() : null;
+  const validTiers = Object.values(SkillTier);
+  const skillTier = rawTier && validTiers.includes(rawTier) ? rawTier : null;
+  if (rawTier && !validTiers.includes(rawTier)) {
+    return res.status(400).json({
+      error: `Invalid skillTier. Must be one of: ${validTiers.join(', ')}`
+    });
+  }
+
+  // Optionally enrich with per-player battle log for changepoint detection.
+  // Requires BRAWL_STARS_API_TOKEN env var; silently skipped when absent.
+  let battleLogByBrawler = null;
+  const rawPlayerTag = req.query.playerTag ? String(req.query.playerTag).trim() : null;
+  if (rawPlayerTag) {
+    try {
+      const rawLog = await brawlApi.fetchBattleLog(rawPlayerTag);
+      const transformed = brawlApi.transformBattleLog(rawLog, rawPlayerTag);
+      battleLogByBrawler = brawlApi.groupBattleLogByBrawler(transformed);
+      logger.debug('Battle log enrichment', { playerTag: rawPlayerTag, battles: transformed.length });
+    } catch (logErr) {
+      logger.warn('Battle log fetch failed (skipping enrichment)', { playerTag: rawPlayerTag, error: logErr.message });
+    }
+  }
+
   const cached = getCached(cacheKey, CACHE_TTL);
   if (cached) {
+    // Re-apply skill-tier weights on cache hits (tier is not stored in cache).
+    // Apply battle log enrichment too when provided.
+    const rerankedBrawlers = (skillTier || battleLogByBrawler)
+      ? rankBrawlers(cached.brawlers, cached.teams || [], cached.mode, skillTier, cached.name)
+      : cached.brawlers;
     return res.json({
       ...cached,
+      brawlers: rerankedBrawlers,
       source: 'brawlapi',
       cached: true,
       fetchMs: 0,
@@ -679,7 +743,7 @@ app.get('/api/map/:id', validateMapId, async (req, res) => {
   try {
     const raw = await brawlApi.fetchMap(id);
     const isActive = catalog.activeMapIds.has(Number(id));
-    const stripped = stripMapResponse(raw, catalog.brawlerById, isActive);
+    const stripped = stripMapResponse(raw, catalog.brawlerById, isActive, skillTier, battleLogByBrawler);
     if (!stripped) {
       return res.status(404).json({
         error: 'Map not found or unsupported response shape.',

@@ -7,6 +7,16 @@
  */
 
 /**
+ * Skill Tier Enumeration
+ * Represents user skill level for weight adjustments
+ */
+const SkillTier = {
+  CASUAL: 'casual',
+  COMPETITIVE: 'competitive',
+  PRO: 'pro'
+};
+
+/**
  * Map Type Enumeration
  * Defines all supported Brawl Stars game modes
  */
@@ -248,9 +258,120 @@ const tierRules = {
 };
 
 /**
+ * Triple-Wise Composition Scoring Configuration
+ *
+ * Controls the new calculateCompositionScore() that replaces the pairwise
+ * synergy model with a full-team composition lift signal.
+ *
+ * compLift = teamWR - mean(individualWRs for all 3 members)
+ * Measured in win-rate percentage points, then normalised to [0, 1].
+ */
+const compositionConfig = {
+  minTeamSampleCount: 50,
+  normalization: {
+    offset: 5,  // centre of expected lift range (pp)
+    range: 10   // full range -5pp → +5pp maps to [0, 1]
+  }
+};
+
+/**
+ * Continuous Use-Rate Score Configuration
+ *
+ * Replaces discrete meta/sleeper/trap categorisation with a sigmoid that
+ * smoothly rewards high win-rate brawlers and penalises brawlers whose
+ * use-rate far exceeds their win-rate (trap picks).
+ *
+ * logit = winRateCoeff * z_win - trapPenaltyCoeff * max(z_use - z_win, 0)
+ * score = sigmoid(logit)
+ */
+const continuousUseRate = {
+  winRateCoeff: 2.0,      // primary driver: how much z_win shifts the score
+  trapPenaltyCoeff: 0.5   // penalty activated when use z-score >> win z-score
+};
+
+/**
+ * Counter-Meta Diversity Penalty Configuration
+ *
+ * Prevents a brawler that hard-counters a single enemy from being ranked
+ * as a top counter pick.  When one matchup dominates the weight sum the
+ * score deviation from neutral (0.5) is attenuated.
+ *
+ * diversityMultiplier = minMultiplier + (1 - minMultiplier) * diversity
+ * where diversity = 1 - maxWeight / totalWeight.
+ */
+const counterDiversity = {
+  minMultiplier: 0.7  // floor when one matchup completely dominates
+};
+
+/**
+ * Skill Tier Weight Modifiers
+ *
+ * Additive adjustments applied to the base mode weights before re-normalising.
+ * 'competitive' is the identity (no change from base config).
+ */
+const skillTierModifiers = {
+  [SkillTier.CASUAL]: {
+    // Casual players rely more on raw individual power; synergy matters less
+    performance:  +0.10,
+    synergy:      -0.10,
+    counter:      -0.05,
+    popularity:   +0.05
+  },
+  [SkillTier.COMPETITIVE]: {
+    performance: 0,
+    synergy:     0,
+    counter:     0,
+    popularity:  0
+  },
+  [SkillTier.PRO]: {
+    // Pro teams exploit synergy and counter-picks more deliberately
+    performance:  -0.05,
+    synergy:      +0.10,
+    counter:      +0.05,
+    popularity:   -0.10
+  }
+};
+
+/**
+ * Changepoint Detection Configuration
+ *
+ * Feature-flagged off by default.  Enable after validating that
+ * timestamped recentGames data is being populated from the upstream API.
+ */
+const changepointDetection = {
+  enabled: true,        // Uses timestamped battle-log data (recentGames array on each brawler)
+  threshold: 2.5,       // |z| above this triggers a changepoint
+  recentWindowDays: 3,  // size of the "recent" window for the z-test
+  minRecentGames: 30,   // minimum games in recent window for the test to run
+  minHalfLife: 2        // floor so the half-life can't shrink below 2 days
+};
+
+/**
+ * Staleness Penalty Configuration
+ *
+ * Activated when a brawler\'s pick rate drops sharply while win rate holds
+ * steady, signalling a meta-discovered weakness not yet reflected in raw WR.
+ */
+const staleness = {
+  pickRateDropThreshold:    -0.30,  // relative drop that triggers the penalty
+  winRateStabilityThreshold: 2.0,  // max WR shift (pp) to still flag as stale
+  maxPenalty: 0.50                  // floor multiplier = 1 - maxPenalty = 0.5
+};
+
+/**
+ * Confidence Interval Configuration
+ *
+ * z-score used for the delta-method 95% CI on CPS.
+ */
+const ciConfig = {
+  zScore: 1.96  // 95% two-sided CI
+};
+
+/**
  * Export all configuration
  */
 module.exports = {
+  SkillTier,
   MapType,
   bayesianPriors,
   timeWeighting,
@@ -258,7 +379,14 @@ module.exports = {
   useRateThresholds,
   useRateScores,
   synergyConfig,
+  compositionConfig,
+  continuousUseRate,
+  counterDiversity,
   counterMetaConfig,
+  skillTierModifiers,
+  changepointDetection,
+  staleness,
+  ciConfig,
   tierPercentiles,
   tierRules
 };
